@@ -1,2 +1,2 @@
 # minigraf
-A tiny GraphQL engine for the browser
+A tiny, portable GraphQL engine.
