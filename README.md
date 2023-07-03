@@ -15,7 +15,7 @@ Minigraf will be designed to run in multiple environments, including:
 - As a WebAssembly module (for browsers).
 
 ## Anti-Scope
-Mingraf will **NOT** be designed to be (for now):
+Minigraf will **NOT** be designed to be (for now):
 - Distributed,
 - Fault-tolerant,
 - ACID-compliant.
