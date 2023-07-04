@@ -14,7 +14,7 @@ Minigraf will be designed to run in multiple environments, including:
 - As a library,
 - As a WebAssembly module (for browsers).
 
-## Anti-Scope
+## Unscope
 Minigraf will **NOT** be designed to be (for now):
 - Distributed,
 - Fault-tolerant,
@@ -25,4 +25,4 @@ Minigraf will support multiple backends to store its data, including:
 - In-memory,
 - IndexedDB (browser only),
 - SQLite,
-- One of more embedded KV stores (such as LevelDB or RocksDB).
+- One or more embedded KV stores (such as LevelDB or RocksDB).
