@@ -1,0 +1,14 @@
+schema {
+    query: Query
+}
+type Query {
+    users: [User!]!,
+}
+"""
+   Example user object
+
+   This is just a demo comment.
+"""
+type User {
+    name: String!,
+}

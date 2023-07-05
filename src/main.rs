@@ -1,24 +1,16 @@
-use std::io;
-use std::io::Write;
-
-use graphql_parser::query::parse_query;
+use graphql_parser::parse_schema;
 
 fn main() {
-    loop {
-        // Prompt user
-        print!("> ");
-        io::stdout().flush().unwrap();
+    // Get the schema file from the command line arguments or use the default.
+    let default_schema_file = "schema.graphql".to_string();
+    let schema_file = &std::env::args().nth(1).unwrap_or(default_schema_file);
 
-        // Read input from stdin
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
+    println!("schema_file: {}", schema_file);
 
-        // Parse input
-        let ast = parse_query::<&str>(input);
+    // Read the schema file and parse it into a schema object.
+    let schema_file = std::fs::read_to_string(schema_file).unwrap();
 
-        println!("{:#?}", ast);
-    }
+    let ast = parse_schema::<String>(&schema_file).unwrap().to_owned();
+
+    println!("{:#?}", ast);
 }
-
-// fn run() {}
