@@ -1,18 +1,11 @@
 use std::io::Write;
 use std::{env, fs, io, process};
 
-mod error_codes {
-    pub const ERROR_INVALID_SCHEMA_FILE: i32 = 1;
-    pub const ERROR_INVALID_SCHEMA: i32 = 2;
-    pub const ERROR_BAD_QUERY: i32 = 3;
-}
+use minigraf::{parse_query, parse_schema};
+use server::{error_codes, logger};
 
-fn error_log<E>(error_code: i32, message: &str, err: E)
-where
-    E: std::fmt::Display,
-{
-    eprintln!("ERROR {}: {}: {}", error_code, message, err);
-}
+mod server;
+
 
 fn main() {
     // Get the schema file from the command line arguments or use the default.
@@ -22,7 +15,7 @@ fn main() {
 
     // Read the schema file and parse it into a schema object.
     let schema_file = fs::read_to_string(schema_file).unwrap_or_else(|err| {
-        error_log(
+        logger::error_log(
             error_codes::ERROR_INVALID_SCHEMA_FILE,
             "Couldn't read schema file",
             err,
@@ -30,8 +23,8 @@ fn main() {
         process::exit(error_codes::ERROR_INVALID_SCHEMA_FILE);
     });
 
-    let schema = minigraf::parse_schema(&schema_file).unwrap_or_else(|err| {
-        error_log(
+    let schema = parse_schema::<String>(&schema_file).unwrap_or_else(|err| {
+        logger::error_log(
             error_codes::ERROR_INVALID_SCHEMA,
             "Couldn't parse schema",
             err,
@@ -52,9 +45,9 @@ fn main() {
         let query = query.trim();
 
         // Parse the query into a query object.
-        let query = minigraf::parse_query(query);
+        let query = parse_query::<String>(query);
         if query.is_err() {
-            error_log(
+            logger::error_log(
                 error_codes::ERROR_BAD_QUERY,
                 "Couldn't parse query",
                 query.err().unwrap(),
