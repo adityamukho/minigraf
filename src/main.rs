@@ -12,11 +12,7 @@ fn main() {
         process::exit(error_codes::ERROR_SCHEMA_FILE_INVALID);
     });
 
-    let schema = minigraf::parse_schema(&schema_file).unwrap_or_else(|err| {
-        eprintln!("Error parsing schema file: {}", err);
-        process::exit(minigraf::error_codes::ERROR_SCHEMA_INVALID);
-    });
-    dbg!("schema: {:#?}", schema);
+    minigraf::load_schema(&schema_file);
 }
 
 mod error_codes {
