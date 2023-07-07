@@ -1,0 +1,2 @@
+pub const ERROR_INVALID_SCHEMA: i32 = 1;
+pub const ERROR_INVALID_QUERY: i32 = 2;

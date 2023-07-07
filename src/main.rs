@@ -9,12 +9,12 @@ fn main() {
     // Read the schema file and parse it into a schema object.
     let schema_file = fs::read_to_string(schema_file).unwrap_or_else(|err| {
         eprintln!("Error reading schema file: {}", err);
-        process::exit(error_codes::ERROR_SCHEMA_FILE_INVALID);
+        process::exit(error_codes::ERROR_INVALID_SCHEMA_FILE);
     });
 
     minigraf::load_schema(&schema_file);
 }
 
 mod error_codes {
-    pub const ERROR_SCHEMA_FILE_INVALID: i32 = 0x100;
+    pub const ERROR_INVALID_SCHEMA_FILE: i32 = -1;
 }
