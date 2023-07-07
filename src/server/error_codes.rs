@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Display, Formatter, Result};
 
 pub enum ErrorCode {
     InvalidSchemaFile = 1,
@@ -7,7 +7,7 @@ pub enum ErrorCode {
 }
 
 impl Display for ErrorCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let error_code = match self {
             ErrorCode::InvalidSchemaFile => "InvalidSchemaFile",
             ErrorCode::InvalidSchema => "InvalidSchema",
