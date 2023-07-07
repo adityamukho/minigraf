@@ -3,6 +3,7 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
 use lazy_static::lazy_static;
+use crate::server::error_codes::ErrorCode;
 
 #[derive(PartialEq, PartialOrd)]
 pub enum LogLevel {
@@ -35,7 +36,7 @@ lazy_static! {
     };
 }
 
-pub fn error_log<E>(error_code: i32, message: &str, err: E)
+pub fn error_log<E>(error_code: ErrorCode, message: &str, err: E)
 where
     E: Display,
 {
