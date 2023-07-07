@@ -5,3 +5,8 @@ edition = "2021"
 
 [dependencies]
 graphql-parser = "0.4.0"
+lazy_static = "1.4.0"
+
+[profile.release]
+panic = "abort"
+
