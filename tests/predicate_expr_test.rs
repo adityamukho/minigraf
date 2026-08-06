@@ -382,3 +382,70 @@ fn test_arithmetic_binding_into_sum_aggregate() {
     totals.sort_unstable();
     assert_eq!(totals, vec![20, 30]);
 }
+
+// ── String comparison filters ─────────────────────────────────────────────────
+
+#[test]
+fn test_string_comparison_filters_lexicographically() {
+    let db = open();
+    db.execute(r#"(transact [[:a :name "alice"] [:b :name "bob"] [:c :name "carol"]])"#)
+        .expect("transact");
+    let r = db
+        .execute(r#"(query [:find ?e :where [?e :name ?n] [(< ?n "c")]])"#)
+        .expect("query");
+    assert_eq!(count(r), 2, "alice and bob sort before \"c\"");
+}
+
+#[test]
+fn test_string_range_partitions_all_rows() {
+    // Regression: ordering predicates on strings matched nothing, so both halves of a
+    // range came back empty rather than summing to the whole relation.
+    let db = open();
+    db.execute(
+        r#"(transact [[:e1 :at "2025-05-06T19:30:00-07:00"]
+                      [:e2 :at "2026-06-11T19:30:00-07:00"]])"#,
+    )
+    .expect("transact");
+
+    let before = db
+        .execute(r#"(query [:find ?d :where [?e :at ?d] [(< ?d "2026-01-01")]])"#)
+        .expect("query");
+    let after = db
+        .execute(r#"(query [:find ?d :where [?e :at ?d] [(>= ?d "2026-01-01")]])"#)
+        .expect("query");
+
+    assert_eq!(count(before), 1, "one event before the boundary");
+    assert_eq!(count(after), 1, "one event on or after it");
+}
+
+#[test]
+fn test_string_comparison_agrees_with_min_aggregate() {
+    // The predicate path and the aggregate path must order strings the same way.
+    let db = open();
+    db.execute(r#"(transact [[:a :name "alice"] [:b :name "bob"]])"#)
+        .expect("transact");
+
+    let rs = rows(
+        db.execute(r#"(query [:find (min ?n) :where [?e :name ?n]])"#)
+            .expect("query"),
+    );
+    assert_eq!(rs.len(), 1);
+    assert_eq!(rs[0][0], MgValue::String("alice".to_string()));
+
+    let r = db
+        .execute(r#"(query [:find ?n :where [?e :name ?n] [(<= ?n "alice")]])"#)
+        .expect("query");
+    assert_eq!(count(r), 1, "the minimum is <= itself and nothing else is");
+}
+
+#[test]
+fn test_string_vs_number_comparison_is_still_an_error() {
+    // Mixed-type ordering remains unsupported — the row is filtered, not coerced.
+    let db = open();
+    db.execute(r#"(transact [[:a :name "alice"]])"#)
+        .expect("transact");
+    let r = db
+        .execute(r#"(query [:find ?n :where [?e :name ?n] [(< ?n 100)]])"#)
+        .expect("query");
+    assert_eq!(count(r), 0, "string vs integer yields no rows");
+}
