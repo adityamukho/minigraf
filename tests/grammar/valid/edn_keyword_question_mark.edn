@@ -1,0 +1,5 @@
+(transact [[:e1 :person/alive? true]
+           [:e2 :alive? false]
+           [:e3 :att?end "infix"]
+           [:e4 :?leading "leading"]
+           [:e5 :state :ready?]])

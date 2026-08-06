@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Bug fixes
 
 - **String comparison in predicates**: `[(< ?a ?b)]`, `>`, `<=` and `>=` now order two strings lexicographically instead of failing. Previously every ordering predicate routed through `to_float_pair`, which errors on non-numeric operands, so a string comparison silently matched no rows — and because both directions returned nothing, a range filter dropped the entire relation rather than partitioning it. This most often bit ISO-8601 timestamps stored as strings. The predicate path now agrees with `value_lt` / `value_cmp`, which `min`, `max` and `:order-by` already use. Mixed-type comparison (string vs number) remains an error, and NaN comparisons remain false.
+- **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.
 
 ## v1.2.1 — 2026-06-28
 

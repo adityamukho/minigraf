@@ -32,8 +32,8 @@ uuid_lit = { "#uuid" ~ string_lit }
 // Prepared-query bind slot: $name
 bind_slot = @{ "$" ~ (ASCII_ALPHANUMERIC | "_" | "-")+ }
 
-// Keyword: starts with ":", followed by alphanumeric, "/", "-", "_"
-keyword = @{ ":" ~ (ASCII_ALPHANUMERIC | "/" | "-" | "_")+ }
+// Keyword: starts with ":", followed by alphanumeric, "/", "-", "_", "?"
+keyword = @{ ":" ~ (ASCII_ALPHANUMERIC | "/" | "-" | "_" | "?")+ }
 
 // Logic variable: starts with "?"
 variable = @{ "?" ~ word_cont* }
