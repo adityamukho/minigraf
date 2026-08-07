@@ -2178,16 +2178,30 @@ fn eval_binop(op: &BinOp, l: Value, r: Value) -> Result<Value, ()> {
     }
 
     match op {
-        // Numeric comparisons — require both numeric; int/float promotion via to_float_pair.
+        // Ordering comparisons. Strings order lexicographically, matching value_lt /
+        // value_cmp — which min/max and :order-by already use — so the same two strings
+        // order the same way whether compared by a predicate or by an aggregate.
+        // Numbers order numerically with int/float promotion via to_float_pair.
+        // Mixed types (string vs number) remain a type error.
         BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-            let (lf, rf) = to_float_pair(&l, &r)?;
-            Ok(Value::Boolean(match op {
-                BinOp::Lt => lf < rf,
-                BinOp::Gt => lf > rf,
-                BinOp::Lte => lf <= rf,
-                BinOp::Gte => lf >= rf,
-                #[allow(clippy::unreachable)]
-                _ => unreachable!(),
+            let ordering = match (&l, &r) {
+                (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+                // None when either operand is NaN: every ordering against NaN is false.
+                _ => {
+                    let (lf, rf) = to_float_pair(&l, &r)?;
+                    lf.partial_cmp(&rf)
+                }
+            };
+            Ok(Value::Boolean(match ordering {
+                None => false,
+                Some(ord) => match op {
+                    BinOp::Lt => ord.is_lt(),
+                    BinOp::Gt => ord.is_gt(),
+                    BinOp::Lte => ord.is_le(),
+                    BinOp::Gte => ord.is_ge(),
+                    #[allow(clippy::unreachable)]
+                    _ => unreachable!(),
+                },
             }))
         }
 
@@ -4096,6 +4110,90 @@ mod expr_eval_tests {
             Box::new(Expr::Lit(Value::Integer(100))),
         );
         assert_eq!(eval_expr(&e, &HashMap::new(), None), Err(()));
+    }
+
+    /// Evaluate `a <op> b` for two string literals.
+    fn eval_str_cmp(op: BinOp, a: &str, b: &str) -> Result<Value, ()> {
+        eval_expr(
+            &Expr::BinOp(
+                op,
+                Box::new(Expr::Lit(Value::String(a.to_string()))),
+                Box::new(Expr::Lit(Value::String(b.to_string()))),
+            ),
+            &HashMap::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn test_eval_string_comparison_is_lexicographic() {
+        assert_eq!(
+            eval_str_cmp(BinOp::Lt, "apple", "banana"),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            eval_str_cmp(BinOp::Lt, "banana", "apple"),
+            Ok(Value::Boolean(false))
+        );
+        assert_eq!(
+            eval_str_cmp(BinOp::Gt, "banana", "apple"),
+            Ok(Value::Boolean(true))
+        );
+    }
+
+    #[test]
+    fn test_eval_string_comparison_equal_operands() {
+        // Strict comparisons are false and non-strict are true for equal strings.
+        assert_eq!(
+            eval_str_cmp(BinOp::Lt, "same", "same"),
+            Ok(Value::Boolean(false))
+        );
+        assert_eq!(
+            eval_str_cmp(BinOp::Gt, "same", "same"),
+            Ok(Value::Boolean(false))
+        );
+        assert_eq!(
+            eval_str_cmp(BinOp::Lte, "same", "same"),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            eval_str_cmp(BinOp::Gte, "same", "same"),
+            Ok(Value::Boolean(true))
+        );
+    }
+
+    #[test]
+    fn test_eval_string_comparison_totality() {
+        // Regression: both directions returned no match, so a range filter silently
+        // dropped every row instead of partitioning them. Exactly one must hold.
+        let lt = eval_str_cmp(BinOp::Lt, "2025-05-06", "2026-01-01");
+        let gte = eval_str_cmp(BinOp::Gte, "2025-05-06", "2026-01-01");
+        assert_eq!(lt, Ok(Value::Boolean(true)), "earlier date sorts first");
+        assert_eq!(gte, Ok(Value::Boolean(false)), "and not the other way");
+    }
+
+    #[test]
+    fn test_eval_nan_comparison_is_false() {
+        // Unchanged by the string arm: every ordering against NaN stays false.
+        let e = Expr::BinOp(
+            BinOp::Lt,
+            Box::new(Expr::Lit(Value::Float(f64::NAN))),
+            Box::new(Expr::Lit(Value::Float(1.0))),
+        );
+        assert_eq!(
+            eval_expr(&e, &HashMap::new(), None),
+            Ok(Value::Boolean(false))
+        );
+
+        let e = Expr::BinOp(
+            BinOp::Gte,
+            Box::new(Expr::Lit(Value::Float(f64::NAN))),
+            Box::new(Expr::Lit(Value::Float(1.0))),
+        );
+        assert_eq!(
+            eval_expr(&e, &HashMap::new(), None),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]

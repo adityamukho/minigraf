@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug fixes
+
+- **String comparison in predicates**: `[(< ?a ?b)]`, `>`, `<=` and `>=` now order two strings lexicographically instead of failing. Previously every ordering predicate routed through `to_float_pair`, which errors on non-numeric operands, so a string comparison silently matched no rows — and because both directions returned nothing, a range filter dropped the entire relation rather than partitioning it. This most often bit ISO-8601 timestamps stored as strings. The predicate path now agrees with `value_lt` / `value_cmp`, which `min`, `max` and `:order-by` already use. Mixed-type comparison (string vs number) remains an error, and NaN comparisons remain false.
+
 ## v1.2.1 — 2026-06-28
 
 Drop-in replacement for v1.2.0. No file-format changes, no public API changes.
