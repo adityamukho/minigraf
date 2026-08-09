@@ -826,13 +826,17 @@ fn test_v2_file_opens_and_upgrades_to_v3_on_checkpoint() {
 /// `mem::forget` skips `FileLock::drop`, so the sidecar `.graph.lock` is left
 /// behind holding OUR pid. A lock held by a live pid means a handle that is
 /// open right now, so reopening is correctly refused (#304) -- but that is not
-/// what a crash leaves. A crashed process leaves the lock holding its own,
-/// now-dead pid. Rewrite it to a genuinely dead pid so the reopen below
-/// exercises the real stale-lock reclamation path instead of relying on
-/// minigraf treating our own live lock as stale.
+/// what a crash leaves behind. A crashed process leaves the lock holding its
+/// own, now-dead pid.
+///
+/// Removing the lock models the state the next open actually finds after a
+/// crashed holder is cleaned up, and does so on every platform. Writing a dead
+/// pid instead would only work on procfs targets: `is_process_alive` cannot
+/// tell dead from live without `/proc` and deliberately errs towards "alive",
+/// so a dead pid still blocks on macOS and Windows. Reclamation of a dead
+/// holder's lock is covered directly by
+/// `storage::backend::file::tests::test_dead_other_process_lock_is_still_reclaimed`;
+/// these tests are about WAL replay.
 fn simulate_crashed_holder(db_path: &std::path::Path) {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let dead_pid = child.id();
-    child.wait().unwrap();
-    std::fs::write(db_path.with_extension("graph.lock"), dead_pid.to_string()).unwrap();
+    let _ = std::fs::remove_file(db_path.with_extension("graph.lock"));
 }

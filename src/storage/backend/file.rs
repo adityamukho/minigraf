@@ -361,6 +361,12 @@ mod tests {
     /// A lock left behind by a *different*, dead process is still stale and
     /// must still be self-healed — that behaviour is what the `pid == our_pid`
     /// branch was overreaching from, and it must survive the fix.
+    ///
+    /// procfs-only: without `/proc`, `is_process_alive` cannot distinguish a
+    /// dead PID from a live one and deliberately errs towards "alive" (see its
+    /// own comment), so reclamation is a Linux/Android guarantee only. On other
+    /// platforms a stale lock must still be removed by hand.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn test_dead_other_process_lock_is_still_reclaimed() {
         let dir = tempfile::tempdir().unwrap();

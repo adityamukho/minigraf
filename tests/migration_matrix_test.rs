@@ -101,18 +101,12 @@ fn wal_replay_after_migration_is_idempotent() {
         std::mem::forget(db);
     }
     // mem::forget also skips FileLock::drop, leaving the sidecar lock behind
-    // holding OUR pid. A real crash leaves it holding the *dead* crashed
-    // process's pid, and that is the case reclamation exists for. A lock held
-    // by a live pid -- ours -- means a handle that is open right now, and
-    // stealing it gives two backends divergent page tables (#304). Rewrite the
-    // pid so this models the crash the test is named for; the WAL-replay
-    // assertion below is unchanged.
-    {
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
-        std::fs::write(path.with_extension("graph.lock"), dead_pid.to_string()).unwrap();
-    }
+    // holding OUR pid. A lock held by a live pid means a handle that is open
+    // right now, so reopening is correctly refused (#304) -- but that is not
+    // what a crash leaves behind. Clear it, which models the state the next
+    // open finds once a crashed holder is cleaned up. The WAL-replay assertion
+    // below is unchanged.
+    std::fs::remove_file(path.with_extension("graph.lock")).unwrap();
     let db3 = Minigraf::open(&path).unwrap();
     let n = count_results(
         db3.execute("(query [:find ?c :where [?e :color ?c]])")
