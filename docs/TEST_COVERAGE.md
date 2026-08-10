@@ -1,11 +1,11 @@
 # Minigraf Test Coverage Report
 
-**Last Updated**: v1.2.0 (June 2026), 974 tests ✅
+**Last Updated**: v1.2.2 (August 2026), 998 tests ✅
 
 ## Test Summary
 
-**Total Tests**: 974 ✅ (966 passing, 8 ignored)
-- ✅ 653 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289)
+**Total Tests**: 998 ✅ (990 passing, 8 ignored)
+- ✅ 663 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, FileLock same-process exclusion #304)
 - ✅ 12 bi-temporal tests (integration)
 - ✅ 11 complex query tests (integration)
 - ✅ 9 recursive rules tests (integration)
@@ -14,13 +14,13 @@
 - ✅ 2 cross-platform compat tests (integration, Phase 8.1)
 - ✅ 6 index tests (integration, Phase 6.1)
 - ✅ 7 performance tests (integration, Phase 6.2/6.4b)
-- ✅ 7 retraction tests (integration, Phase 6.4a)
+- ✅ 8 retraction tests (integration, Phase 6.4a)
 - ✅ 4 edge case tests (integration, Phase 6.4a)
 - ✅ 8 B+tree v6 tests (integration, Phase 6.5)
 - ✅ 10 negation (`not`) tests (integration, Phase 7.1a)
 - ✅ 14 not-join tests (integration, Phase 7.1b)
 - ✅ 24 aggregation tests (integration, Phase 7.2a)
-- ✅ 28 predicate expression tests (integration, Phase 7.2b)
+- ✅ 32 predicate expression tests (integration, Phase 7.2b — includes lexicographic string ordering #312)
 - ✅ 18 disjunction tests (integration, Phase 7.3)
 - ✅ 8 production pattern tests (integration, Phase 7.5 — cross-feature scenarios)
 - ✅ 8 error handling tests (integration, Phase 7.5 — error-path coverage)
@@ -35,10 +35,21 @@
 - ✅ 1 long-haul smoke test (integration, Wave 3 #220 — 500 entities × 10 attrs × 10 cycles; ignored: nightly)
 - ✅ 10 XTDB compat tests (integration, Wave 3 #221 — Apache 2.0 semantic ports of XTDB concepts)
 - ✅ 9 Datomic compat tests (integration, Wave 3 #221 — independently written semantic ports of Datomic concepts)
-- ✅ 5 magic sets tests (integration, #289 — demand-driven recursive evaluation correctness: bound transitive closure, all-free closure, subset invariant, multi-hop, mutual recursion)
+- ✅ 7 magic sets tests (integration, #289 — demand-driven recursive evaluation correctness: bound transitive closure, all-free closure, subset invariant, multi-hop, mutual recursion)
 - ✅ 15 doc tests (9 passing, 6 ignored: doc examples referencing internal types that cannot compile as standalone rustdoc tests)
 
-**Status**: ✅ **All 966 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
+**Status**: ✅ **All 990 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
+
+## v1.2.2 Completion Status: ✅ COMPLETE
+
+**v1.2.2 issues**: #312 (lexicographic string comparison in predicates), #304 (two handles on one file in the same process)
+
+**New tests added by v1.2.2** (+3 storage-backend, +4 predicate-expression, +2 magic-sets):
+- ✅ `src/storage/backend/file.rs` — 3 FileLock unit tests: same-process second open refused, sequential reopen-after-drop still works, dead *other* process's lock still reclaimed (procfs-gated, since `is_process_alive` errs towards "alive" without `/proc`)
+- ✅ `tests/predicate_expr_test.rs` — string ordering via `<`, `>`, `<=`, `>=`; mixed-type and NaN behaviour pinned
+- ✅ Crash-simulation idiom corrected across `tests/wal_test.rs` (13 sites) and `tests/migration_matrix_test.rs`: `mem::forget` skips `FileLock::drop`, leaving the sidecar lock holding our *own* (live) pid, which is not what a crash leaves behind. Those sites now clear the lock so the reopen models a crashed holder rather than depending on minigraf treating a live lock as stale.
+
+---
 
 ## Wave 3 Reliability Completion Status: ✅ COMPLETE
 
@@ -491,10 +502,14 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - Rule Registry: ~95% (6 tests)
 - Recursive Evaluator: ~95% (10 tests)
 
-### 12. Storage Backends (`src/storage/backend/`) - ✅ Good (8 tests)
+### 12. Storage Backends (`src/storage/backend/`) - ✅ Good (11 tests)
 
 - ✅ FileBackend create/write/read, persistence across close/reopen
 - ✅ MemoryBackend write/read, error handling
+- ✅ **FileLock same-process exclusion** (#304): a second open while a handle is live is refused with an error naming the same-process case — two `FileBackend`s on one file each cache their own `header.page_count` and corrupt each other
+- ✅ FileLock refusal leaves the existing lock in place; dropping the only handle releases it
+- ✅ Sequential open → drop → reopen still works (the per-commit cycle downstream callers rely on)
+- ✅ A lock held by a *different*, dead process is still reclaimed (procfs-gated)
 
 **Coverage**: ~85%
 
@@ -509,7 +524,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 
 ## Integration Tests
 
-### Complex Queries (`tests/complex_queries_test.rs`) - ✅ 10 tests
+### Complex Queries (`tests/complex_queries_test.rs`) - ✅ 11 tests
 
 - ✅ 3-pattern and 4-pattern joins, self-joins, entity reference joins
 - ✅ No results, partial matches, variable reuse, multiple values, empty database
@@ -530,7 +545,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ Open/write/checkpoint/query loop per thread: 10-thread concurrent lifecycle (Wave 3 #217)
 - ✅ Stress open/write loop (nightly, `#[ignore]`): high-contention loop stress test (Wave 3 #217)
 
-### Bi-temporal (`tests/bitemporal_test.rs`) - ✅ 10 tests
+### Bi-temporal (`tests/bitemporal_test.rs`) - ✅ 12 tests
 
 - ✅ As-of counter and timestamp snapshots
 - ✅ Valid-at inside/outside/boundary, default filter, any-valid-time
@@ -539,7 +554,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 ### WAL / Crash Recovery (`tests/wal_test.rs`) - ✅ 21 tests
 
 - ✅ Basic persistence (file-backed transact and query)
-- ✅ WAL replay after `mem::forget` crash simulation
+- ✅ WAL replay after `mem::forget` crash simulation (the sidecar lock is cleared alongside, so the reopen models a crashed holder rather than a live one — #304)
 - ✅ Stale WAL dedup via `last_checkpointed_tx_count`
 - ✅ Corrupt/partial entry discard on recovery
 - ✅ Manual checkpoint clears WAL and updates header
@@ -577,7 +592,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ Explicit transaction survives packed reload
 - ✅ `page_cache_size` option accepted without panic
 
-### Retraction Semantics (`tests/retraction_test.rs`) - ✅ 7 tests (Phase 6.4a)
+### Retraction Semantics (`tests/retraction_test.rs`) - ✅ 8 tests (Phase 6.4a)
 
 - ✅ Assert then retract; current-time query returns no results
 - ✅ Assert at tx=1, retract at tx=3; `:as-of 2` shows fact, `:as-of 4` hides it
@@ -635,7 +650,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ Negative cycle via `not-join` at rule registration → `Err`, rule not registered
 - ✅ `not` and `not-join` coexist in the same query
 
-### Window Functions (`tests/window_functions_test.rs`) - ✅ 12 tests (Phase 7.7a)
+### Window Functions (`tests/window_functions_test.rs`) - ✅ 14 tests (Phase 7.7a)
 
 - ✅ Cumulative sum over ordered partition
 - ✅ Running count and running min
@@ -649,7 +664,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ Empty-result edge case (no matching facts)
 - ✅ `lag` / `lead` rejected at parse time
 
-### User-Defined Functions (`tests/udf_test.rs`) - ✅ 9 tests (Phase 7.7b)
+### User-Defined Functions (`tests/udf_test.rs`) - ✅ 10 tests (Phase 7.7b)
 
 - ✅ `custom_aggregate_geometric_mean` — UDF aggregate registered and used in `:find`
 - ✅ `custom_aggregate_empty_result` — UDF aggregate on empty result set returns correct identity
@@ -687,7 +702,7 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ v3 empty migrate — empty v3 database opens and migrates to v7 cleanly
 - ✅ corrupt magic — file with bad magic header returns `Err`, not panic
 - ✅ unsupported version — file with unrecognised format version returns `Err`
-- ✅ WAL replay idempotent — replaying a WAL twice produces the same result as replaying once
+- ✅ WAL replay idempotent — replaying a WAL twice produces the same result as replaying once (crash simulated by `mem::forget` plus clearing the sidecar lock — #304)
 
 ### Index Corruption (`tests/index_corruption_test.rs`) - ✅ 5 tests (Wave 3 #216)
 
@@ -842,15 +857,20 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 
 ## What's Not Tested Yet ⏳
 
-### Phase 7.3+ (Remaining Datalog Completeness)
-- ⏳ Disjunction (`or` / `or-join`) — Phase 7.3
-- ⏳ Query optimizer improvements for new clause types (aggregation, expr, disjunction) — Phase 7.4
-- ⏳ Prepared statements with temporal bind slots — Phase 7.6
-- ⏳ Temporal metadata pseudo-attributes (`:db/valid-from`, `:db/valid-to`, `:db/tx-count`) — Phase 7.7
+### Roadmap (not yet implemented)
+- ⏳ `lag` / `lead` window functions — v2.0 (#182); currently rejected at parse time
+- ⏳ Sliding row frames (`:rows N preceding`) — v2.0 (#183)
+- ⏳ Structured runtime error codes — v1.3.0 (#277)
+- ⏳ Rule persistence across sessions — v1.4.0 (#241)
+- ⏳ Query profiler — v1.4.0 (#185)
 
-### Known Limitations (Acceptable for Phase 3-7.2b)
-- ⏳ Crash during checkpoint write (safe by construction — WAL not deleted until save succeeds; explicit test deferred to Phase 7.5)
-- ⏳ Disjunction — Phase 7.3
+Every Phase 7.3–7.9 item previously listed here (disjunction, optimizer work for new
+clause types, prepared statements, temporal pseudo-attributes) has since shipped and is
+covered above.
+
+### Known Limitations
+- ⏳ Crash during checkpoint write (safe by construction — WAL not deleted until save succeeds; covered indirectly by the Wave 3 checkpoint-atomicity fault-injection tests)
+- ⏳ Stale-lock reclamation is procfs-only: without `/proc`, `is_process_alive` cannot distinguish a dead pid from a live one and deliberately errs towards "alive", so a crashed holder's lock must be removed by hand on macOS and Windows (#304)
 - ⏳ Known `not-join` limitation: when a rule B positively invokes rule A and both are stratum 0, single-pass mixed-rule evaluation means B may not see A's derived facts unless rules are declared in dependency order
 - ⏳ `matches?` pattern compiled per-row (no caching); will be optimised in Phase 7.9b (`FunctionRegistry`)
 
@@ -866,26 +886,33 @@ cargo test
 cargo test --quiet
 
 # Run specific test suites
-cargo test --lib                       # Unit tests (216)
-cargo test --test bitemporal           # Bi-temporal (10)
-cargo test --test complex_queries      # Complex queries (10)
-cargo test --test recursive_rules      # Recursive rules (9)
-cargo test --test concurrency          # Concurrency (12, 1 ignored)
+cargo test --lib                       # Unit tests (663)
+cargo test --test bitemporal_test      # Bi-temporal (12)
+cargo test --test complex_queries_test # Complex queries (11)
+cargo test --test recursive_rules_test # Recursive rules (9)
+cargo test --test concurrency_test     # Concurrency (12, 1 ignored)
 cargo test --test wal_test             # WAL / crash recovery (21)
 cargo test --test index_test           # Covering indexes (6)
 cargo test --test performance_test     # Packed pages (7)
-cargo test --test retraction_test      # Retraction semantics (7)
+cargo test --test retraction_test      # Retraction semantics (8)
 cargo test --test edge_cases_test      # Edge cases (4)
 cargo test --test btree_v6_test        # B+tree v6 (8)
 cargo test --test negation_test        # stratified not (10)
 cargo test --test not_join_test        # not-join (14)
+cargo test --test disjunction_test     # or / or-join (18)
 cargo test --test aggregation_test     # aggregation (24)
-cargo test --test predicate_expr_test  # arithmetic & predicate expr (28)
-cargo test --test window_functions_test # window functions (12)
-cargo test --test udf_test             # user-defined functions (9)
+cargo test --test predicate_expr_test  # arithmetic & predicate expr (32)
+cargo test --test temporal_metadata_test # temporal pseudo-attributes (22)
+cargo test --test window_functions_test # window functions (14)
+cargo test --test udf_test             # user-defined functions (10)
 cargo test --test prepared_statements_test # prepared statements (17)
+cargo test --test production_patterns_test # cross-feature scenarios (8)
+cargo test --test error_handling_test      # error paths (8)
+cargo test --test grammar_conformance      # pest shadow grammar (3)
+cargo test --test magic_sets_test          # magic sets (7)
 cargo test --test migration_matrix_test    # migration matrix (5)
 cargo test --test index_corruption_test    # index corruption (5)
+cargo test --test cross_platform_compat_test # cross-platform compat (2)
 cargo test --test property_test            # property-based (3)
 cargo test --test xtdb_compat_test         # XTDB compat (10)
 cargo test --test datomic_compat_test      # Datomic compat (9)
@@ -930,7 +957,8 @@ cargo test -- --nocapture
 - Long-haul smoke verified: 500 entities × 10 attrs × 10 cycles, 7 invariants, nightly CI (Wave 3)
 - XTDB compatibility verified: 10 semantic ports covering EAV, time travel, negation, rules, prepared queries (Wave 3)
 - Datomic compatibility verified: 9 independently written semantic ports covering datom model, tx-time, retraction, Datalog patterns (Wave 3)
-- 935 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat (including browser WASM + WASI + cross-platform compat + fuzzing CI)
+- Same-process handle exclusion verified: a second open on a live file is refused rather than silently granted, which is what produced the intermittent `Page N out of bounds` (v1.2.2, #304)
+- 998 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat (including browser WASM + WASI + cross-platform compat + fuzzing CI)
 
 **Confidence Level**: ✅ **Production-ready for Wave 3 scope**
 
