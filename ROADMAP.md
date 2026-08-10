@@ -1693,7 +1693,7 @@ When evaluating features, ask:
 
 ## Current Focus
 
-**Current release**: v1.2.2 (August 2026) — same-process file-handle exclusion (#304) and lexicographic string comparison (#312); drop-in replacement for v1.2.1
+**Current release**: v1.2.3 (August 2026) — no core changes; cut so the bindings can republish with the `minigraf-node` `close()` fix that v1.2.2's handle exclusion made necessary
 
 **Completed**:
 - ✅ Phase 8 / v1.0.0: Cross-platform release (WASM, WASI, Mobile, Python, Java, C FFI, Node.js)
@@ -1705,6 +1705,7 @@ When evaluating features, ask:
 - ✅ Documentation — cookbook (#190), perf tuning guide (#191), error message guide (#192)
 - ✅ v1.2.0 — Magic Sets rewriting (#289), per-query `:max-derived-facts`/`:max-results` limits (#288), bug fixes (#272, #283, #285), perf improvements (#279, #281)
 - ✅ v1.2.1 — Magic sets `fb` adornment fix: sentinel entity + 2-arg guard preserves keyword type through value-position binding (#297, #298)
+- ✅ v1.2.3 — Core unchanged; cut to carry `minigraf-node`'s new `close()` (project-minigraf/minigraf-node#1), needed because v1.2.2's handle exclusion left GC'd hosts with no way to release a handle
 - ✅ v1.2.2 — `FileLock::acquire` no longer treats a lock held by our own PID as stale, which had allowed two handles on one file per process with divergent page tables — the source of the intermittent `Page N out of bounds` (#304); ordering predicates compare strings lexicographically (#312)
 
 **Transferred to other repos**:
@@ -1728,4 +1729,4 @@ See [GitHub Issues](https://github.com/project-minigraf/minigraf/issues) for spe
 
 ---
 
-**Last Updated**: August 2026 — v1.2.2 released; same-process handle exclusion (#304), lexicographic string comparison (#312). Next up is v1.3.0 (performance + structured errors: #274, #275, #248, #250, #277)
+**Last Updated**: August 2026 — v1.2.3 released (core unchanged; carries the minigraf-node `close()` fix). Next up is v1.3.0 (performance + structured errors: #274, #275, #248, #250, #277)

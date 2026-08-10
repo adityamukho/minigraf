@@ -1,6 +1,6 @@
 # Minigraf Test Coverage Report
 
-**Last Updated**: v1.2.2 (August 2026), 998 tests ✅
+**Last Updated**: v1.2.3 (August 2026), 998 tests ✅
 
 ## Test Summary
 

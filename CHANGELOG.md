@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.2.3 — 2026-08-10
+
+No changes to the core crate. Released so the language bindings have a version
+to republish on, carrying a fix that lives in a binding rather than here.
+
+v1.2.2 made a second handle on an already-open file an error (#304). The
+UniFFI bindings and the C API already had a way to release a handle on demand
+(`destroy()` and `minigraf_close` respectively), but the Node binding did not,
+and JavaScript has no deterministic destructor — so reopening a `.graph` file
+in one process became impossible there. `minigraf-node` gained a `close()`
+method (project-minigraf/minigraf-node#1); this release is what lets it ship.
+
+Binding versions track the core version, so all seven bindings republish at
+1.2.3.
+
 ## v1.2.2 — 2026-08-10
 
 Drop-in replacement for v1.2.1. No file-format changes, no public API changes.
