@@ -96,8 +96,17 @@ fn wal_replay_after_migration_is_idempotent() {
     {
         let db = Minigraf::open(&path).unwrap();
         db.execute(r#"(transact [[:e2 :color "blue"]])"#).unwrap();
+        // Simulate a crash: no Drop, so no checkpoint, and the WAL is left for
+        // the next open to replay.
         std::mem::forget(db);
     }
+    // mem::forget also skips FileLock::drop, leaving the sidecar lock behind
+    // holding OUR pid. A lock held by a live pid means a handle that is open
+    // right now, so reopening is correctly refused (#304) -- but that is not
+    // what a crash leaves behind. Clear it, which models the state the next
+    // open finds once a crashed holder is cleaned up. The WAL-replay assertion
+    // below is unchanged.
+    std::fs::remove_file(path.with_extension("graph.lock")).unwrap();
     let db3 = Minigraf::open(&path).unwrap();
     let n = count_results(
         db3.execute("(query [:find ?c :where [?e :color ?c]])")
