@@ -268,6 +268,70 @@ fn datomic_predicate_expression_filter() {
     assert_eq!(adults, 3, "entities with age >= 18: a, b, d");
 }
 
+// ── Datomic concept: predicate-style attribute names ─────────────────────────
+
+/// Datomic concept: attribute keywords may end in '?', following the Clojure
+/// convention for predicates (`:artist/dead?`). Regression test — '?' formerly
+/// terminated the keyword, so `:person/alive?` lexed as `:person/alive` plus a
+/// stray symbol, which made a three-element fact look like a four-element one.
+/// Datomic doc reference: "Schema" — attribute naming.
+#[test]
+fn datomic_attribute_keyword_may_end_in_question_mark() {
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(
+        r#"(transact [
+        [:user42 :person/alive? true]
+        [:user43 :person/alive? false]
+    ])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        count_results(
+            db.execute(r#"(query [:find ?e ?v :where [?e :person/alive? ?v]])"#)
+                .unwrap()
+        ),
+        2,
+        "both predicate-named facts must be queryable"
+    );
+
+    // The value binds correctly, so the fact was stored as (e, a, v) and not
+    // misread as a fact with a spurious fourth element.
+    let alive = db
+        .execute(r#"(query [:find ?e :where [?e :person/alive? true]])"#)
+        .unwrap();
+    assert_eq!(count_results(alive), 1, "exactly one entity is alive");
+}
+
+/// A '?' in value position stays a keyword too, and query variables are
+/// unaffected — only keywords changed.
+#[test]
+fn datomic_keyword_value_may_end_in_question_mark() {
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(r#"(transact [[:job1 :job/state :ready?]])"#)
+        .unwrap();
+
+    let by_value = db
+        .execute(r#"(query [:find ?e :where [?e :job/state :ready?]])"#)
+        .unwrap();
+    assert_eq!(count_results(by_value), 1, "keyword value must match");
+
+    match db
+        .execute(r#"(query [:find ?s :where [?e :job/state ?s]])"#)
+        .unwrap()
+    {
+        QueryResult::QueryResults { results, .. } => {
+            assert_eq!(results.len(), 1, "expected one binding");
+            assert_eq!(
+                results[0][0],
+                Value::Keyword(":ready?".to_string()),
+                "value must round-trip with its '?'"
+            );
+        }
+        _ => panic!("expected query results"),
+    }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SKIPPED CASES
 // ═════════════════════════════════════════════════════════════════════════════

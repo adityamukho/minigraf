@@ -103,7 +103,10 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 chars.next();
                 let mut keyword = String::from(":");
                 while let Some(&ch) = chars.peek() {
-                    if ch.is_alphanumeric() || ch == '/' || ch == '-' || ch == '_' {
+                    // '?' is a constituent character, matching symbols (see below) and
+                    // EDN itself — predicate-style names like :person/alive? are idiomatic.
+                    // A keyword can never be a query variable, so there is no ambiguity.
+                    if ch.is_alphanumeric() || ch == '/' || ch == '-' || ch == '_' || ch == '?' {
                         if keyword.len() >= MAX_KEYWORD_LENGTH {
                             return Err(format!(
                                 "Keyword exceeds maximum length of {} bytes",
@@ -1930,6 +1933,35 @@ mod tests {
         let result = tokenize(&long_keyword);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn test_tokenize_keyword_with_question_mark() {
+        // Regression: '?' ended the keyword, so ":attended?" lexed as
+        // Keyword(":attended") + Symbol("?"), turning a three-element fact into
+        // four and reporting the value as a bogus fourth element.
+        let tokens = tokenize("[:a :attended? true]").unwrap();
+        assert_eq!(tokens.len(), 5, "expected 5 tokens");
+        assert_eq!(tokens[2], Token::Keyword(":attended?".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_keyword_question_mark_positions() {
+        // Leading, infix, trailing and namespaced forms all stay in one token.
+        let tokens = tokenize(":?x :att?end :alive? :person/alive?").unwrap();
+        assert_eq!(tokens[0], Token::Keyword(":?x".to_string()));
+        assert_eq!(tokens[1], Token::Keyword(":att?end".to_string()));
+        assert_eq!(tokens[2], Token::Keyword(":alive?".to_string()));
+        assert_eq!(tokens[3], Token::Keyword(":person/alive?".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_variable_still_lexes_as_symbol() {
+        // A '?' that does not follow ':' still starts a query variable.
+        let tokens = tokenize("[?e :alive? ?v]").unwrap();
+        assert_eq!(tokens[1], Token::Symbol("?e".to_string()));
+        assert_eq!(tokens[2], Token::Keyword(":alive?".to_string()));
+        assert_eq!(tokens[3], Token::Symbol("?v".to_string()));
     }
 
     #[test]

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug fixes
+
+- **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.
+
 ## v1.2.3 — 2026-08-10
 
 No changes to the core crate. Released so the language bindings have a version

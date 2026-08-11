@@ -285,6 +285,150 @@ fn xtdb_recursive_ancestor_rule() {
     );
 }
 
+// ── Predicate-style keyword names ─────────────────────────────────────────────
+
+/// XTDB concept: attributes are EDN keywords, and names ending in '?' are the
+/// idiomatic Clojure spelling for a predicate (`:artist/dead?`).
+///
+/// Regression test — '?' formerly terminated the keyword token, so
+/// `:artist/dead?` lexed as `:artist/dead` followed by a stray symbol, and a
+/// three-element fact was read as a four-element one.
+/// Source: XTDB "Data Model" — documents are EDN; attributes are keywords.
+#[test]
+fn xtdb_attribute_keyword_may_end_in_question_mark() {
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(
+        r#"(transact [
+        [:pablo    :artist/dead? true]
+        [:salvador :artist/dead? true]
+        [:banksy   :artist/dead? false]
+    ])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        count_results(
+            db.execute(r#"(query [:find ?e ?v :where [?e :artist/dead? ?v]])"#)
+                .unwrap()
+        ),
+        3,
+        "every predicate-named fact must be queryable"
+    );
+
+    // Binding by value proves the fact was stored as (e, a, v) rather than
+    // being misread as a fact with a spurious fourth element.
+    assert_eq!(
+        count_results(
+            db.execute(r#"(query [:find ?e :where [?e :artist/dead? false]])"#)
+                .unwrap()
+        ),
+        1,
+        "exactly one artist is living"
+    );
+}
+
+/// XTDB concept: a keyword is a legal attribute *value*, so entities can be
+/// joined on one — and it keeps its '?' through storage and back.
+/// Source: XTDB "Data Model" — keyword values.
+#[test]
+fn xtdb_keyword_value_may_end_in_question_mark() {
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(
+        r#"(transact [
+        [:job1 :job/state :ready?]
+        [:job2 :job/state :blocked?]
+        [:job3 :job/state :ready?]
+    ])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        count_results(
+            db.execute(r#"(query [:find ?e :where [?e :job/state :ready?]])"#)
+                .unwrap()
+        ),
+        2,
+        "two jobs are ready"
+    );
+
+    match db
+        .execute(r#"(query [:find ?s :where [:job2 :job/state ?s]])"#)
+        .unwrap()
+    {
+        QueryResult::QueryResults { results, .. } => {
+            assert_eq!(results.len(), 1, "expected one binding");
+            assert_eq!(
+                results[0][0],
+                Value::Keyword(":blocked?".to_string()),
+                "value must round-trip with its '?'"
+            );
+        }
+        _ => panic!("expected query results"),
+    }
+}
+
+/// XTDB concept: retraction targets one fact, and a predicate-named attribute
+/// is no different. Exercises the write path, where the original defect turned
+/// a three-element fact into a rejected four-element one.
+/// Source: XTDB "Transactions" — retract.
+#[test]
+fn xtdb_retract_predicate_named_attribute() {
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(r#"(transact [[:alice :person/admin? true] [:alice :name "Alice"]])"#)
+        .unwrap();
+
+    db.execute(r#"(retract [[:alice :person/admin? true]])"#)
+        .unwrap();
+
+    assert_eq!(
+        count_results(
+            db.execute(r#"(query [:find ?v :where [?e :person/admin? ?v]])"#)
+                .unwrap()
+        ),
+        0,
+        "the predicate-named fact should be retracted"
+    );
+    assert_eq!(
+        query_strings(&db, r#"(query [:find ?n :where [?e :name ?n]])"#),
+        vec!["Alice".to_string()],
+        "the other fact should survive"
+    );
+}
+
+/// XTDB concept: bitemporality applies to predicate-named attributes like any
+/// other. Valid-time filtering is a separate path from a plain match, so a
+/// keyword that survives parsing must survive it too.
+/// Source: XTDB "Bitemporality" — valid-time queries.
+#[test]
+fn xtdb_valid_time_query_over_predicate_named_attribute() {
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(
+        r#"(transact {:valid-from "2023-01-01" :valid-to "2023-12-31"} [[:contract :contract/active? true]])"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        count_results(
+            db.execute(
+                r#"(query [:find ?v :valid-at "2023-06-01" :where [?e :contract/active? ?v]])"#
+            )
+            .unwrap()
+        ),
+        1,
+        "visible within the valid-time range"
+    );
+    assert_eq!(
+        count_results(
+            db.execute(
+                r#"(query [:find ?v :valid-at "2024-01-01" :where [?e :contract/active? ?v]])"#
+            )
+            .unwrap()
+        ),
+        0,
+        "not visible after the valid-to boundary"
+    );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SKIPPED CASES
 // ═════════════════════════════════════════════════════════════════════════════
