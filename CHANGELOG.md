@@ -5,9 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v1.2.3 — 2026-08-10
+
+No changes to the core crate. Released so the language bindings have a version
+to republish on, carrying a fix that lives in a binding rather than here.
+
+v1.2.2 made a second handle on an already-open file an error (#304). The
+UniFFI bindings and the C API already had a way to release a handle on demand
+(`destroy()` and `minigraf_close` respectively), but the Node binding did not,
+and JavaScript has no deterministic destructor — so reopening a `.graph` file
+in one process became impossible there. `minigraf-node` gained a `close()`
+method (project-minigraf/minigraf-node#1); this release is what lets it ship.
+
+Binding versions track the core version, so all seven bindings republish at
+1.2.3.
+
+## v1.2.2 — 2026-08-10
+
+Drop-in replacement for v1.2.1. No file-format changes, no public API changes.
 
 ### Bug fixes
+
+- **Two handles on one file in the same process** (#304): `FileLock::acquire` treated a lock file whose holder PID equalled our own as stale, deleted it, and opened anyway — on the theory that it could only be a leaked handle. The far more likely cause is a handle that is open and in use right now elsewhere in the process, so the "self-heal" silently produced two live `FileBackend`s on one file. Each caches its own `header.page_count`, allocates new pages from that count, and bounds-checks `read_page` against it, so the two page tables diverge. That — not an allocation off-by-one — is the source of the intermittent `Page N out of bounds (total pages: M)`. It also corrupted the lock itself: whichever handle dropped first ran `FileLock::drop` and removed the lock file that by then belonged to the survivor, leaving a live handle unlocked and admitting other processes too. A lock held by our own PID is now refused with an error naming the same-process case; a lock held by a *different*, dead process is still reclaimed as before. **Behaviour change:** callers that relied on reopening a path they already hold open now get an error instead of silent corruption, and should reuse the existing handle (`Minigraf` is cheap to clone and all clones share one database).
 
 - **String comparison in predicates**: `[(< ?a ?b)]`, `>`, `<=` and `>=` now order two strings lexicographically instead of failing. Previously every ordering predicate routed through `to_float_pair`, which errors on non-numeric operands, so a string comparison silently matched no rows — and because both directions returned nothing, a range filter dropped the entire relation rather than partitioning it. This most often bit ISO-8601 timestamps stored as strings. The predicate path now agrees with `value_lt` / `value_cmp`, which `min`, `max` and `:order-by` already use. Mixed-type comparison (string vs number) remains an error, and NaN comparisons remain false.
 - **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.

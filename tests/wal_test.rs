@@ -87,6 +87,7 @@ fn test_wal_recovery_after_simulated_crash() {
         // is the only handle, forgetting it leaks the Arc permanently and
         // the Drop impl never runs.
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
 
     // WAL must still exist (no checkpoint happened)
@@ -129,6 +130,7 @@ fn test_no_duplicate_facts_after_post_checkpoint_crash() {
         db.execute(r#"(transact [[:alice :name "Alice"]])"#)
             .unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
 
     // Back up the WAL before the next open checkpoints it away
@@ -188,6 +190,7 @@ fn test_partial_wal_entry_discarded_earlier_entries_intact() {
         db.execute(r#"(transact [[:alice :name "Alice"]])"#)
             .unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
 
     // Append garbage bytes after the valid WAL entry (simulate partial second write)
@@ -275,6 +278,7 @@ fn test_manual_checkpoint_deletes_wal() {
 
     // Simulate crash: skip Drop (checkpoint already happened, no WAL to write)
     std::mem::forget(db);
+    simulate_crashed_holder(&db_path);
 
     // Reopen: must recover the fact from the main file alone (no WAL needed)
     let db2 = Minigraf::open(&db_path).unwrap();
@@ -319,6 +323,7 @@ fn test_auto_checkpoint_fires_at_threshold() {
         );
         // Crash: skip Drop checkpoint (but checkpoint already happened)
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
 
     // No WAL after crash
@@ -367,6 +372,7 @@ fn test_explicit_tx_all_or_nothing_commit() {
 
         // Crash before Drop checkpoint
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
 
     // Recovery session
@@ -516,6 +522,7 @@ fn test_implicit_tx_execute_survives_replay() {
 
         // Simulate crash: skip Drop (and its checkpoint).
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
 
     // WAL must exist — no checkpoint fired.
@@ -550,6 +557,7 @@ fn setup_db_with_one_fact() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) 
         let db = minigraf::db::Minigraf::open(&db_path).unwrap();
         db.execute(r#"(transact [[:e1 :name "Alice"]])"#).unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
     let wal_bytes = read_wal_bytes(&db_path);
     (dir, db_path, wal_bytes)
@@ -604,6 +612,7 @@ fn wal_recover_bad_checksum_second_entry() {
         db.execute(r#"(transact [[:e1 :name "Alice"]])"#).unwrap();
         db.execute(r#"(transact [[:e2 :name "Bob"]])"#).unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
     let mut wal_bytes = read_wal_bytes(&db_path);
     assert!(wal_bytes.len() > 36, "WAL too short to corrupt");
@@ -630,6 +639,7 @@ fn wal_recover_committed_tx_crash_before_checkpoint() {
         tx.execute(r#"(transact [[:e1 :name "Charlie"]])"#).unwrap();
         tx.commit().unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
     let names = query_names(&db_path);
     assert_eq!(
@@ -653,6 +663,7 @@ fn wal_recover_rollback_crash() {
         tx.execute(r#"(transact [[:e1 :name "Dave"]])"#).unwrap();
         tx.rollback();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
     let names = query_names(&db_path);
     assert_eq!(
@@ -671,6 +682,7 @@ fn wal_recover_multiple_committed_corrupt_tail() {
         db.execute(r#"(transact [[:e1 :name "Eve"]])"#).unwrap();
         db.execute(r#"(transact [[:e2 :name "Frank"]])"#).unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
     let mut wal_bytes = read_wal_bytes(&db_path);
     wal_bytes.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00]);
@@ -691,6 +703,7 @@ fn wal_corrupt_tail_never_applied() {
         let db = minigraf::db::Minigraf::open(&db_path).unwrap();
         db.execute(r#"(transact [[:e1 :name "Grace"]])"#).unwrap();
         std::mem::forget(db);
+        simulate_crashed_holder(&db_path);
     }
     let mut wal_bytes = read_wal_bytes(&db_path);
     let mut fake_entry: Vec<u8> = Vec::new();
@@ -806,4 +819,24 @@ fn test_v2_file_opens_and_upgrades_to_v3_on_checkpoint() {
         last_checkpointed_tx_count > 0,
         "last_checkpointed_tx_count must be set after checkpoint on v2→v6 upgrade"
     );
+}
+
+/// Complete a `mem::forget`-based crash simulation.
+///
+/// `mem::forget` skips `FileLock::drop`, so the sidecar `.graph.lock` is left
+/// behind holding OUR pid. A lock held by a live pid means a handle that is
+/// open right now, so reopening is correctly refused (#304) -- but that is not
+/// what a crash leaves behind. A crashed process leaves the lock holding its
+/// own, now-dead pid.
+///
+/// Removing the lock models the state the next open actually finds after a
+/// crashed holder is cleaned up, and does so on every platform. Writing a dead
+/// pid instead would only work on procfs targets: `is_process_alive` cannot
+/// tell dead from live without `/proc` and deliberately errs towards "alive",
+/// so a dead pid still blocks on macOS and Windows. Reclamation of a dead
+/// holder's lock is covered directly by
+/// `storage::backend::file::tests::test_dead_other_process_lock_is_still_reclaimed`;
+/// these tests are about WAL replay.
+fn simulate_crashed_holder(db_path: &std::path::Path) {
+    let _ = std::fs::remove_file(db_path.with_extension("graph.lock"));
 }
