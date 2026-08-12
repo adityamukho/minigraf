@@ -1,0 +1,69 @@
+name: Property Tests (nightly)
+
+on:
+  schedule:
+    # Offset from the 02:00 UTC benchmark schedule to avoid runner contention.
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  proptest:
+    name: Property tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run property tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --test property_test -- --nocapture 2>&1 | tee proptest-output.txt
+        env:
+          PROPTEST_CASES: 8000000
+          RUST_BACKTRACE: 1
+
+      - name: Record property-test failure
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Nightly property-test failure"
+        run: |
+          report_file="property-test-failure.md"
+          {
+            echo "The nightly property-test workflow failed."
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Reproduce: \`PROPTEST_CASES=8000000 cargo test --test property_test -- --nocapture\`"
+            echo
+            echo "## Test output"
+            echo
+            echo '```text'
+            tail -n 1000 proptest-output.txt
+            echo '```'
+          } > "$report_file"
+
+          existing_issue="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$ISSUE_TITLE in:title" \
+            --json number,title \
+            --limit 100 \
+            --jq '.[] | select(.title == "Nightly property-test failure") | .number' \
+            | head -n 1)"
+
+          if [ -n "$existing_issue" ]; then
+            gh issue comment "$existing_issue" --repo "$GITHUB_REPOSITORY" --body-file "$report_file"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$report_file"
+          fi
