@@ -7,12 +7,13 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   fuzz:
     name: Fuzz targets
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
 
     steps:
       - uses: actions/checkout@v4
@@ -29,26 +30,116 @@ jobs:
       - name: Install cargo-fuzz
         run: which cargo-fuzz || cargo install cargo-fuzz
 
-      - name: Fuzz wal_entry (60s)
-        run: cargo fuzz run wal_entry -- -max_total_time=60
-        continue-on-error: false
+      - name: Fuzz wal_entry (55m)
+        id: wal_entry
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fuzz run wal_entry -- -max_total_time=3300 2>&1 | tee fuzz-wal_entry.log
+        continue-on-error: true
 
-      - name: Fuzz file_header (60s)
-        run: cargo fuzz run file_header -- -max_total_time=60
-        continue-on-error: false
+      - name: Fuzz file_header (55m)
+        id: file_header
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fuzz run file_header -- -max_total_time=3300 2>&1 | tee fuzz-file_header.log
+        continue-on-error: true
 
-      - name: Fuzz fact_page (60s)
-        run: cargo fuzz run fact_page -- -max_total_time=60
-        continue-on-error: false
+      - name: Fuzz fact_page (55m)
+        id: fact_page
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fuzz run fact_page -- -max_total_time=3300 2>&1 | tee fuzz-fact_page.log
+        continue-on-error: true
 
-      - name: Fuzz btree_page (60s)
-        run: cargo fuzz run btree_page -- -max_total_time=60
-        continue-on-error: false
+      - name: Fuzz btree_page (55m)
+        id: btree_page
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fuzz run btree_page -- -max_total_time=3300 2>&1 | tee fuzz-btree_page.log
+        continue-on-error: true
 
-      - name: Fuzz datalog_parser (60s)
-        run: cargo fuzz run datalog_parser -- -max_total_time=60
-        continue-on-error: false
+      - name: Fuzz datalog_parser (55m)
+        id: datalog_parser
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fuzz run datalog_parser -- -max_total_time=3300 2>&1 | tee fuzz-datalog_parser.log
+        continue-on-error: true
 
-      - name: Fuzz datalog_eval (60s)
-        run: cargo fuzz run datalog_eval -- -max_total_time=60
-        continue-on-error: false
+      - name: Fuzz datalog_eval (55m)
+        id: datalog_eval
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fuzz run datalog_eval -- -max_total_time=3300 2>&1 | tee fuzz-datalog_eval.log
+        continue-on-error: true
+
+      - name: Upload fuzz failures
+        if: ${{ always() && (steps.wal_entry.outcome == 'failure' || steps.file_header.outcome == 'failure' || steps.fact_page.outcome == 'failure' || steps.btree_page.outcome == 'failure' || steps.datalog_parser.outcome == 'failure' || steps.datalog_eval.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures-${{ github.run_id }}
+          path: |
+            fuzz/artifacts/
+            fuzz-*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Record fuzz failures
+        if: ${{ always() && (steps.wal_entry.outcome == 'failure' || steps.file_header.outcome == 'failure' || steps.fact_page.outcome == 'failure' || steps.btree_page.outcome == 'failure' || steps.datalog_parser.outcome == 'failure' || steps.datalog_eval.outcome == 'failure') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Nightly fuzz failure"
+          FAILED_TARGETS: >-
+            wal_entry=${{ steps.wal_entry.outcome }},
+            file_header=${{ steps.file_header.outcome }},
+            fact_page=${{ steps.fact_page.outcome }},
+            btree_page=${{ steps.btree_page.outcome }},
+            datalog_parser=${{ steps.datalog_parser.outcome }},
+            datalog_eval=${{ steps.datalog_eval.outcome }}
+        run: |
+          report_file="fuzz-failure.md"
+          {
+            echo "The nightly fuzz workflow found one or more failures."
+            echo
+            echo "- Run and artifacts: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Target outcomes: $FAILED_TARGETS"
+            echo "- Reproduce: \`cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<crash-file>\`"
+            echo
+            echo "## Fuzz logs"
+            echo
+            for log in fuzz-*.log; do
+              [ -e "$log" ] || continue
+              echo "### $log"
+              echo
+              echo '```text'
+              tail -n 500 "$log"
+              echo '```'
+              echo
+            done
+          } > "$report_file"
+
+          existing_issue="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$ISSUE_TITLE in:title" \
+            --json number,title \
+            --limit 100 \
+            --jq '.[] | select(.title == "Nightly fuzz failure") | .number' \
+            | head -n 1)"
+
+          if [ -n "$existing_issue" ]; then
+            gh issue comment "$existing_issue" --repo "$GITHUB_REPOSITORY" --body-file "$report_file"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$report_file"
+          fi
+
+      - name: Fail workflow when fuzzing finds a failure
+        if: ${{ always() && (steps.wal_entry.outcome == 'failure' || steps.file_header.outcome == 'failure' || steps.fact_page.outcome == 'failure' || steps.btree_page.outcome == 'failure' || steps.datalog_parser.outcome == 'failure' || steps.datalog_eval.outcome == 'failure') }}
+        run: exit 1
