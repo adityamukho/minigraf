@@ -34,6 +34,14 @@ impl FileLock {
     /// itself — whichever handle dropped first ran `FileLock::drop` and deleted
     /// the lock file belonging to the survivor, leaving a live handle unlocked
     /// and letting other processes in too.
+    ///
+    /// The lock content is `<pid>` or, on procfs platforms, `<pid>:<starttime>`
+    /// where `starttime` is field 22 of `/proc/<pid>/stat` (clock ticks since
+    /// boot). The start time disambiguates "same PID, same live process" from
+    /// "same PID number, different process incarnation": under Linux PID
+    /// namespaces every container's main process is PID 1, so when a pod dies
+    /// and a replacement pod mounts the same volume, the stale lock names the
+    /// new process's own PID and a bare-PID check would refuse forever.
     fn acquire(db_path: &Path) -> Result<Self> {
         let lock_path = db_path.with_extension("graph.lock");
         // create_new fails with AlreadyExists if the lock file is present
@@ -43,16 +51,39 @@ impl FileLock {
             .open(&lock_path)
         {
             Ok(mut f) => {
-                // Write PID for diagnostics (best-effort)
-                let _ = write!(f, "{}", std::process::id());
+                // Write PID (plus process start time where procfs is available)
+                // for diagnostics and stale-lock detection (best-effort)
+                match Self::process_start_time(std::process::id()) {
+                    Some(start_time) => {
+                        let _ = write!(f, "{}:{}", std::process::id(), start_time);
+                    }
+                    None => {
+                        let _ = write!(f, "{}", std::process::id());
+                    }
+                }
                 Ok(FileLock { path: lock_path })
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Check if the holder process is still alive
                 let holder = std::fs::read_to_string(&lock_path).unwrap_or_default();
-                if let Ok(pid) = holder.trim().parse::<u32>() {
+                if let Some((pid, start_time)) = Self::parse_lock_content(&holder) {
                     let our_pid = std::process::id();
                     if pid == our_pid {
+                        // Same PID number does not imply same process: under PID
+                        // namespaces (Kubernetes) a replacement container reuses
+                        // PID 1, so a dead predecessor's lock aliases our own
+                        // PID. If the recorded start time differs from ours, the
+                        // holder is a different, dead incarnation — the lock is
+                        // stale. A matching, absent, or unreadable start time
+                        // keeps the #304 refusal exactly as-is.
+                        let stale = matches!(
+                            (start_time, Self::process_start_time(our_pid)),
+                            (Some(recorded), Some(ours)) if recorded != ours
+                        );
+                        if stale {
+                            let _ = std::fs::remove_file(&lock_path);
+                            return Self::acquire(db_path);
+                        }
                         // A handle in THIS process holds the lock. Say so
                         // explicitly: the generic "another process" wording sent
                         // #304 looking for a second process for a long time.
@@ -66,7 +97,17 @@ impl FileLock {
                             pid
                         );
                     }
-                    if !Self::is_process_alive(pid) {
+                    // A live foreign PID can also be a namespace alias for a
+                    // dead holder (the previous container's process happened to
+                    // have the same in-namespace PID as one of ours). When both
+                    // start times are known and differ, the live process is not
+                    // the lock's author and the lock is stale.
+                    let holder_stale = !Self::is_process_alive(pid)
+                        || matches!(
+                            (start_time, Self::process_start_time(pid)),
+                            (Some(recorded), Some(live)) if recorded != live
+                        );
+                    if holder_stale {
                         // Stale lock — the holding process died without cleaning
                         // up. Remove and retry.
                         let _ = std::fs::remove_file(&lock_path);
@@ -104,6 +145,41 @@ impl FileLock {
         // On non-procfs systems (macOS, Windows), assume alive (conservative).
         // Users must manually delete stale lock files on these platforms.
         true
+    }
+
+    /// Parse lock file content into (PID, optional process start time).
+    ///
+    /// Accepts both `<pid>:<starttime>` (current) and bare `<pid>` (written by
+    /// versions before start times were recorded); anything else is `None`.
+    fn parse_lock_content(content: &str) -> Option<(u32, Option<u64>)> {
+        let mut parts = content.trim().split(':');
+        let pid = parts.next()?.parse::<u32>().ok()?;
+        let start_time = match parts.next() {
+            Some(s) => Some(s.parse::<u64>().ok()?),
+            None => None,
+        };
+        Some((pid, start_time))
+    }
+
+    /// Read a process's start time from `/proc/<pid>/stat` (field 22,
+    /// `starttime`, in clock ticks since boot). Two processes in different
+    /// PID namespaces may share a PID number, but not a start time.
+    ///
+    /// Returns `None` on non-procfs platforms and on any read or parse
+    /// failure; callers treat `None` as "unknown" and stay conservative.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn process_start_time(pid: u32) -> Option<u64> {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+        // The comm field (2) is wrapped in parens and may itself contain
+        // spaces or parens, so split at the LAST ')'; what follows is fields
+        // 3 onwards, and field 22 is the 20th token of that remainder.
+        let after_comm = stat.rsplit_once(')')?.1;
+        after_comm.split_whitespace().nth(19)?.parse().ok()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    fn process_start_time(_pid: u32) -> Option<u64> {
+        None
     }
 }
 
@@ -387,6 +463,83 @@ mod tests {
             backend.is_ok(),
             "a dead other process's lock must still be reclaimed: {:?}",
             backend.err()
+        );
+    }
+
+    /// PID namespaces (Kubernetes) make every container's main process PID 1,
+    /// so a replacement pod mounting the same volume finds a stale lock naming
+    /// its own PID. A recorded start time that differs from ours identifies
+    /// the holder as a different, dead incarnation — the lock must be
+    /// reclaimed, not refused forever.
+    ///
+    /// procfs-only for the same reason as
+    /// `test_dead_other_process_lock_is_still_reclaimed`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn test_namespaced_same_pid_lock_with_wrong_start_time_is_reclaimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp_path = dir.path().join("test_minigraf_pidns_stale.graph");
+        let lock_path = temp_path.with_extension("graph.lock");
+
+        let our_pid = std::process::id();
+        let our_start = FileLock::process_start_time(our_pid).unwrap();
+        std::fs::write(&lock_path, format!("{}:{}", our_pid, our_start + 1)).unwrap();
+
+        let backend = FileBackend::open(&temp_path);
+        assert!(
+            backend.is_ok(),
+            "a lock naming our PID with a different start time is a dead \
+             namespaced predecessor and must be reclaimed: {:?}",
+            backend.err()
+        );
+    }
+
+    /// The disambiguation must not weaken #304: a lock naming our PID with
+    /// OUR OWN start time is a live handle in this process and must still be
+    /// refused.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn test_same_pid_lock_with_our_own_start_time_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp_path = dir.path().join("test_minigraf_pidns_live.graph");
+        let lock_path = temp_path.with_extension("graph.lock");
+
+        let our_pid = std::process::id();
+        let our_start = FileLock::process_start_time(our_pid).unwrap();
+        std::fs::write(&lock_path, format!("{}:{}", our_pid, our_start)).unwrap();
+
+        let msg = match FileBackend::open(&temp_path) {
+            Ok(_) => panic!("a lock with our PID and our start time must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("already open in this process"),
+            "error should name the same-process case, got: {msg}"
+        );
+        assert!(
+            lock_path.exists(),
+            "a refused acquire must leave the existing lock in place"
+        );
+    }
+
+    /// Backward compatibility: lock files written before start times were
+    /// recorded contain a bare PID. One naming our own PID must still be
+    /// refused exactly as before (#304 semantics unchanged for old locks).
+    #[test]
+    fn test_legacy_bare_pid_lock_with_our_pid_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp_path = dir.path().join("test_minigraf_legacy_lock.graph");
+        let lock_path = temp_path.with_extension("graph.lock");
+
+        std::fs::write(&lock_path, std::process::id().to_string()).unwrap();
+
+        let msg = match FileBackend::open(&temp_path) {
+            Ok(_) => panic!("a legacy bare-PID lock naming our PID must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("already open in this process"),
+            "error should name the same-process case, got: {msg}"
         );
     }
 

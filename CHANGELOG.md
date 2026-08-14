@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug fixes
 
+- **Stale lock under Linux PID namespaces** (Kubernetes): `FileLock::acquire` refused a lock file whose holder PID equalled its own, and only reclaimed locks held by a *different*, dead process. Every container's main process is PID 1 in its own namespace, so when a pod died and a replacement pod mounted the same persistent volume, the stale lock named the new process's own PID — refused permanently, and `is_process_alive(1)` always true, until the lock file was deleted by hand. On procfs platforms the lock now records the holder's process start time (`/proc/<pid>/stat` field 22) as `<pid>:<starttime>`; a lock naming our own PID whose recorded start time differs from ours is a dead namespaced predecessor and is reclaimed, and the same check applies to a live foreign PID that aliases a dead holder. The #304 invariants are unchanged: a matching, absent, or unreadable start time (including legacy bare-`<pid>` locks and all non-procfs platforms) is still refused as "already open in this process".
+
 - **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.
 
 ## v1.2.3 — 2026-08-10
