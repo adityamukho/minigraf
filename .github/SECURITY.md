@@ -2,14 +2,16 @@
 
 ## Supported Versions
 
-Minigraf is pre-1.0 and under active development. Only the latest published
-version on [crates.io](https://crates.io/crates/minigraf) and the current
-`main` branch receive security fixes. Older versions are not patched.
+Minigraf is post-1.0 and under active development. Only the latest published
+minor release line on [crates.io](https://crates.io/crates/minigraf) and the
+current `main` branch receive security fixes. Older minor release lines are not
+patched unless a separate security advisory explicitly says otherwise.
 
 | Version | Supported |
 | ------- | --------- |
-| latest (0.x) | ✅ |
-| older 0.x    | ❌ |
+| latest 1.x minor line | ✅ |
+| older 1.x minor lines | ❌ |
+| 0.x                   | ❌ |
 
 ## Reporting a Vulnerability
 
