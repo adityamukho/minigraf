@@ -4,6 +4,18 @@
 //! An example rather than a test so it is a standalone binary the test can run
 //! under `unshare`.
 //!
+//! # Why the release marker is an argument, not an environment variable
+//!
+//! It was an environment variable first, and that silently did nothing on CI.
+//! GitHub's runners restrict unprivileged user namespaces, so the test falls
+//! back to `sudo unshare ...`, and sudo defaults to `env_reset`: everything
+//! outside a small allowlist is stripped before the command runs. The holder
+//! therefore saw no marker, took the "nothing to wait for" path, and aborted
+//! the instant it had the lock -- so the second container found the file free
+//! and opened it, and the test reported that a live holder had not been
+//! excluded, when in truth there had been no live holder to exclude.
+//! Arguments cross that boundary; environment variables do not.
+//!
 //! # Why this kills itself
 //!
 //! The obvious design is for the test to spawn a holder and kill it. That does
@@ -26,6 +38,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let path = &args[1];
     let mode = &args[2];
+    // Optional: a path this process waits for before dying. An argument rather
+    // than an env var so it survives `sudo` -- see the note above.
+    let release_marker = args.get(3).map(std::path::PathBuf::from);
 
     match minigraf::Minigraf::open(path) {
         Ok(db) => {
@@ -48,8 +63,7 @@ fn main() {
                 // The deadline is a backstop, not the mechanism: if the parent
                 // dies without writing the marker, this process must not sit on
                 // the lock indefinitely.
-                if let Ok(marker) = std::env::var("MINIGRAF_NS_RELEASE_MARKER") {
-                    let marker = std::path::PathBuf::from(marker);
+                if let Some(marker) = release_marker {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
                     while !marker.exists() && std::time::Instant::now() < deadline {
                         std::thread::sleep(std::time::Duration::from_millis(20));

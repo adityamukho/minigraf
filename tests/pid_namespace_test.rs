@@ -79,9 +79,11 @@ fn spawn_in_namespace(
     // With no marker the holder aborts the moment it has the lock. With one,
     // it holds until this process creates that file. See the module comment on
     // `examples/pid_ns_helper.rs` for why the holder ends its own life rather
-    // than being killed from here, and why the hold cannot be a fixed sleep.
+    // than being killed from here, why the hold cannot be a fixed sleep, and
+    // why this is an argument rather than an environment variable -- sudo
+    // strips the environment, and an env var here silently did nothing on CI.
     if let Some(marker) = release_marker {
-        cmd.env("MINIGRAF_NS_RELEASE_MARKER", marker);
+        cmd.arg(marker);
     }
 
     cmd.spawn().expect("spawn in namespace")
