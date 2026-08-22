@@ -4,6 +4,7 @@
 
 .idea
 .worktrees/
+.superpowers/
 .codex
 .opencode/
 .claude/
