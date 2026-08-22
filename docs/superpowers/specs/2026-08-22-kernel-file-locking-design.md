@@ -157,6 +157,16 @@ A leftover `.graph.lock` from v1.2.x is **ignored, not deleted** — deleting it
 break mutual exclusion for a still-running old process. Concurrent access by mixed
 versions is unsupported and documented as such: upgrade all writers together.
 
+> **Delivery note.** Tiers 2 and 3 below are design, not delivery. This branch
+> ships the core fix and Tier 1 only; the NFS and Docker nightly suites are
+> tracked in issue #324. That leaves one risk in this document's own register
+> unmitigated on merge: if `flock` silently no-ops on some network filesystem,
+> two processes both receive `Ok(())` and both write. Tier 2 exists precisely
+> to detect that, and it is not built yet. The trade is still favourable — the
+> sidecar it replaces could not evaluate a remote holder at all, and bricked
+> the database on any crash — but it should be stated plainly rather than left
+> implicit in a linked issue.
+
 ## Non-goals
 
 - Shared/read locks. One exclusive lock; the multi-reader model is not in scope.
@@ -191,14 +201,14 @@ back to `sudo unshare`, which needs no user namespace.
 - **Mutual exclusion holds** — two live PID-1 processes in separate namespaces, the
   second is refused. Guards precisely what PR #318 would have broken.
 
-### Tier 2 — NFS, nightly
+### Tier 2 — NFS, nightly — NOT DELIVERED BY THIS BRANCH, see issue #324
 
 `nfs-kernel-server` on the runner, loopback export, lock suite over NFSv4 and
 NFSv3-without-`lockd`. Asserts a lock is either genuinely exclusive or refused, never a
 silent no-op. This is the surface no other tier reaches and the likeliest place for a
 real bug in the new code.
 
-### Tier 3 — Docker, nightly
+### Tier 3 — Docker, nightly — NOT DELIVERED BY THIS BRANCH, see issue #324
 
 Two containers sharing a volume. Mechanically the same path as tier 1, but matches the
 reporter's setup literally and yields an artifact worth posting on #317.
@@ -217,7 +227,7 @@ plus a fresh PID-1 process, which tier 1 already covers, and `kind` provisions
 | `tests/wal_test.rs` | `run_crashing_child`; convert 13 sites; delete `simulate_crashed_holder` |
 | `tests/migration_matrix_test.rs` | Convert 1 site |
 | `tests/pid_namespace_test.rs` | New — tier 1 |
-| `.github/workflows/nfs-lock.yml` | New — tiers 2 and 3 |
+| `.github/workflows/nfs-lock.yml` | New — tiers 2 and 3. **Deferred to issue #324; not created by this branch.** |
 | `CHANGELOG.md` | Unreleased entry recording new API, MSRV bump, behaviour change |
 | `docs/ERROR_REFERENCE.md` | Three new lock errors |
 | `docs/TEST_COVERAGE.md` | Lines 50, 557, 705 describe the removed idiom |

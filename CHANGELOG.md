@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking-ish changes
 
+- **Adding `OpenOptions::allow_unlocked` breaks struct-literal construction.**
+  `OpenOptions` has all-public fields and is not `#[non_exhaustive]`, so under
+  Rust's semver rules any downstream code building it as
+  `OpenOptions { wal_checkpoint_threshold: .., page_cache_size: .., .. }`
+  without `..Default::default()` no longer compiles. Callers who spread
+  `..Default::default()`, or who use the chainable builder methods, are
+  unaffected. This branch had to update three such literals in its own tree.
+
+  Recorded here because the release decision is deliberately deferred, and
+  whoever makes it needs the facts: this is the **first post-1.0 field
+  addition** to `OpenOptions`. The earlier `max_derived_facts` and
+  `max_results` fields landed in v0.19.0, before 1.0, so they set no
+  precedent under the stability guarantee in PHILOSOPHY.md §7. Marking
+  `OpenOptions` `#[non_exhaustive]` would immunise every future field
+  addition, but is itself a breaking change, so it is a decision to make at
+  the same time as the version number rather than after it.
 - **Minimum supported Rust version is now 1.89** (was effectively 1.85, implied
   by `edition = "2024"`). Required for `std::fs::File::try_lock`, stabilised in
   1.89. Declared as `rust-version` in `Cargo.toml`, so cargo reports a clear

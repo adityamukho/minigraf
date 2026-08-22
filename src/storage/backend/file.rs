@@ -236,7 +236,23 @@ impl FileBackend {
                 // between us and the #304 two-page-tables corruption if a
                 // second handle in this process opens the same unlockable
                 // path.
-                if already_open_here(&canonical) {
+                //
+                // Because it is the only guard, the check and the insert must
+                // be ONE atomic operation. Reading through `already_open_here`
+                // and inserting afterwards releases the mutex in between, and
+                // two threads opening the same path would then both observe
+                // "absent", both insert, and both proceed. `HashSet::insert`
+                // returns false when the key was already present, which gives
+                // us test-and-set under a single lock acquisition.
+                //
+                // A poisoned mutex yields `false` here, so it fails CLOSED:
+                // we refuse to open rather than risk admitting a second
+                // handle we cannot account for.
+                let inserted = OPEN_PATHS
+                    .lock()
+                    .map(|mut open| open.insert(canonical.clone()))
+                    .unwrap_or(false);
+                if !inserted {
                     anyhow::bail!(
                         "Database is already open in this process ({}). A second handle \
                          on one file would give each its own page table and corrupt both \
@@ -244,9 +260,6 @@ impl FileBackend {
                          and all clones share the same database.",
                         path.display()
                     );
-                }
-                if let Ok(mut open) = OPEN_PATHS.lock() {
-                    open.insert(canonical.clone());
                 }
                 PathGuard(Some(canonical))
             }
@@ -496,7 +509,15 @@ mod tests {
             // Comfortably longer than LOCK_RETRY_ATTEMPTS' ~375ms budget, so
             // this process's retries must exhaust while the lock is still
             // genuinely held.
-            .env("MINIGRAF_HOLD_MILLIS", "600")
+            //
+            // 3s rather than something nearer the budget: at 600ms only
+            // ~215ms of slack separated the two, and if this process were
+            // descheduled for longer than that anywhere across its ten retry
+            // iterations, the child would release mid-loop, this open would
+            // SUCCEED, and the test would fail claiming a cross-process lock
+            // was not refused. CI runs this on three platforms with 34 test
+            // binaries in flight, so that margin was not safe.
+            .env("MINIGRAF_HOLD_MILLIS", "3000")
             .spawn()
             .expect("spawn lock holder");
 
@@ -521,10 +542,12 @@ mod tests {
             Err(e) => e.to_string(),
         };
 
-        // (b) the retry budget is bounded: this must fail well within a
-        // second, not hang for the holder's full 600ms hold plus margin.
+        // (b) the retry budget is bounded: this must fail in roughly the
+        // ~375ms budget, NOT hang for the holder's full 3s hold. The 2s bound
+        // is far below the hold, so a regression that waited for the holder
+        // instead of giving up would fail here.
         assert!(
-            elapsed < std::time::Duration::from_secs(1),
+            elapsed < std::time::Duration::from_secs(2),
             "retry budget must be bounded, not hang"
         );
 
@@ -542,7 +565,13 @@ mod tests {
         // Once the holder exits, the lock -- and the holder's own registry
         // entry, which only the holder's process could ever remove -- are
         // both gone, so a fresh open succeeds without retrying at all.
-        holder.wait().expect("wait for lock holder");
+        //
+        // Kill rather than waiting out the remaining hold: it keeps the test
+        // fast, and release-on-SIGKILL is the property that actually matters
+        // here. A holder that exits cleanly is the easy case; #317 was about
+        // one that never got to run any cleanup at all.
+        holder.kill().expect("kill lock holder");
+        holder.wait().expect("reap lock holder");
         FileBackend::open(&db_path).expect("open must succeed once the holder exits");
 
         let _ = std::fs::remove_file(&ready_marker);
