@@ -67,15 +67,59 @@ fn spawn_in_namespace(
     db: &Path,
     mode: &str,
 ) -> std::process::Child {
+    use std::os::unix::process::CommandExt;
+
     Command::new(&prefix[0])
         .args(&prefix[1..])
         .arg(helper)
         .arg(db)
         .arg(mode)
+        // Give the child its own process group, so the whole tree beneath it
+        // -- privilege wrapper, `unshare`, and the process that becomes PID 1
+        // in the new namespace -- can be killed as a unit. See `kill_holder`.
+        .process_group(0)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn in namespace")
+}
+
+/// Kills a namespaced holder and everything beneath it, then reaps it.
+///
+/// Killing the spawned process alone is not enough when a privilege wrapper
+/// sits between us and `unshare`: SIGKILL runs no handler, so the wrapper
+/// forwards nothing and the namespaced holder survives, still holding the
+/// flock. That produces a spectacularly misleading failure — the #317
+/// regression test fails identically whether or not the bug is present,
+/// because the lock genuinely is still held.
+///
+/// The child leads its own process group (see `spawn_in_namespace`), so
+/// signalling the negated PID reaches every descendant. When the prefix
+/// escalates privilege, the descendants are root-owned and the signal has to
+/// be sent with the same escalation, or it fails with EPERM.
+fn kill_holder(prefix: &[String], child: &mut KillOnDrop) {
+    let pgid = child.id().to_string();
+    let target = format!("-{pgid}");
+
+    let mut kill = if prefix[0] == "sudo" {
+        let mut c = Command::new("sudo");
+        c.arg("-n").arg("kill");
+        c
+    } else {
+        Command::new("kill")
+    };
+
+    let _ = kill
+        .arg("-9")
+        .arg(&target)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    // Belt and braces: also signal the direct child, in case the process
+    // group could not be signalled at all.
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Kills and reaps the wrapped child on drop.
@@ -175,8 +219,15 @@ fn test_lock_survives_holder_death_in_another_pid_namespace() {
     assert!(held, "container A never opened the database");
 
     // Container A is OOMKilled. No Drop runs.
-    let _ = a.kill();
-    let _ = a.wait();
+    //
+    // `kill()` reaches only the process we spawned. Where `unshare` is the
+    // direct child that is enough, because `--kill-child` sets
+    // PR_SET_PDEATHSIG on the process that becomes PID 1. Where a privilege
+    // wrapper sits in between, killing the wrapper cannot propagate — a
+    // SIGKILLed process runs no handler and forwards nothing — so the
+    // namespaced holder would survive and keep the lock. Kill the whole
+    // process group instead, which reaches every descendant regardless.
+    kill_holder(&prefix, &mut a);
 
     // Container B: a different container, also PID 1 in its own namespace.
     let b = spawn_in_namespace(&prefix, &helper, &db, "open")
@@ -184,10 +235,14 @@ fn test_lock_survives_holder_death_in_another_pid_namespace() {
         .expect("container B ran");
 
     let out = String::from_utf8_lossy(&b.stdout);
+    let err = String::from_utf8_lossy(&b.stderr);
     assert!(
         out.contains("OPEN_OK"),
         "a replacement container must be able to open the database after its \
-         predecessor was killed; this is #317"
+         predecessor was killed; this is #317.\n\
+         prefix used: {prefix:?}\n\
+         container B stdout: {out}\n\
+         container B stderr: {err}"
     );
 }
 
@@ -222,12 +277,19 @@ fn test_two_live_namespaced_holders_are_still_refused() {
         .wait_with_output()
         .expect("container B ran");
     let out = String::from_utf8_lossy(&b.stdout);
+    let err = String::from_utf8_lossy(&b.stderr);
 
-    let _ = a.kill();
-    let _ = a.wait();
+    // Cleanup only — B's result is already captured, so an orphan here cannot
+    // fail this test. It would still leave a namespaced process sitting on the
+    // flock for its full 300-second sleep, which on a shared CI runner is a
+    // fine way to break somebody else's test.
+    kill_holder(&prefix, &mut a);
 
     assert!(
         out.contains("OPEN_ERR"),
-        "a second live holder in another PID namespace must still be refused"
+        "a second live holder in another PID namespace must still be refused.\n\
+         prefix used: {prefix:?}\n\
+         container B stdout: {out}\n\
+         container B stderr: {err}"
     );
 }
