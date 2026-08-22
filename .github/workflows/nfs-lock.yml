@@ -1,0 +1,159 @@
+name: NFS/Docker lock tests (nightly)
+
+# Tiers 2 and 3 of the kernel file-locking design
+# (docs/superpowers/specs/2026-08-22-kernel-file-locking-design.md): the
+# per-PR suite (tests/pid_namespace_test.rs) covers PID namespaces but cannot
+# reach how `std::fs::File::try_lock` behaves on a network filesystem or in
+# real containers. See #324.
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  nfs:
+    name: NFS lock suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install and start a loopback NFS server
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y nfs-kernel-server nfs-common
+          sudo modprobe nfsd || true
+
+          sudo mkdir -p /srv/nfs/export
+          sudo chown "$(id -u)":"$(id -g)" /srv/nfs/export
+          echo "/srv/nfs/export 127.0.0.1(rw,sync,no_subtree_check,no_root_squash,insecure)" \
+            | sudo tee -a /etc/exports
+          sudo exportfs -ra
+          sudo systemctl restart nfs-kernel-server
+
+      - name: Mount the export as NFSv4 and as NFSv3 without lockd
+        run: |
+          sudo mkdir -p /mnt/nfs-v4 /mnt/nfs-v3-nolock
+          sudo mount -t nfs -o vers=4,proto=tcp 127.0.0.1:/srv/nfs/export /mnt/nfs-v4
+          sudo mount -t nfs -o vers=3,nolock 127.0.0.1:/srv/nfs/export /mnt/nfs-v3-nolock
+          sudo chown "$(id -u)":"$(id -g)" /mnt/nfs-v4 /mnt/nfs-v3-nolock
+
+      - name: Build the PID-namespace helper binary
+        run: cargo build --examples
+
+      - name: Run the NFS lock suite
+        shell: bash
+        env:
+          MINIGRAF_NFS_TEST_DIR_V4: /mnt/nfs-v4
+          MINIGRAF_NFS_TEST_DIR_V3_NOLOCK: /mnt/nfs-v3-nolock
+          RUST_BACKTRACE: 1
+        run: |
+          set -o pipefail
+          cargo test --test nfs_lock_test -- --nocapture 2>&1 | tee nfs-lock-output.txt
+
+      - name: Record NFS lock-suite failure
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Nightly NFS lock-suite failure"
+        run: |
+          report_file="nfs-lock-failure.md"
+          {
+            echo "The nightly NFS lock suite failed."
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Reproduce: needs a loopback NFS export mounted as vers=4 and as"
+            echo "  vers=3,nolock; see the \"nfs\" job in .github/workflows/nfs-lock.yml"
+            echo
+            echo "## Test output"
+            echo
+            echo '```text'
+            tail -n 1000 nfs-lock-output.txt
+            echo '```'
+          } > "$report_file"
+
+          existing_issue="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$ISSUE_TITLE in:title" \
+            --json number,title \
+            --limit 100 \
+            --jq '.[] | select(.title == "Nightly NFS lock-suite failure") | .number' \
+            | head -n 1)"
+
+          if [ -n "$existing_issue" ]; then
+            gh issue comment "$existing_issue" --repo "$GITHUB_REPOSITORY" --body-file "$report_file"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$report_file"
+          fi
+
+  docker:
+    name: Docker lock suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the PID-namespace helper binary
+        run: cargo build --examples
+
+      - name: Run the Docker lock suite
+        shell: bash
+        env:
+          RUST_BACKTRACE: 1
+        run: |
+          set -o pipefail
+          cargo test --test docker_lock_test -- --nocapture 2>&1 | tee docker-lock-output.txt
+
+      - name: Record Docker lock-suite failure
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Nightly Docker lock-suite failure"
+        run: |
+          report_file="docker-lock-failure.md"
+          {
+            echo "The nightly Docker lock suite failed."
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Reproduce: needs a reachable Docker daemon; see the \"docker\" job"
+            echo "  in .github/workflows/nfs-lock.yml"
+            echo
+            echo "## Test output"
+            echo
+            echo '```text'
+            tail -n 1000 docker-lock-output.txt
+            echo '```'
+          } > "$report_file"
+
+          existing_issue="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$ISSUE_TITLE in:title" \
+            --json number,title \
+            --limit 100 \
+            --jq '.[] | select(.title == "Nightly Docker lock-suite failure") | .number' \
+            | head -n 1)"
+
+          if [ -n "$existing_issue" ]; then
+            gh issue comment "$existing_issue" --repo "$GITHUB_REPOSITORY" --body-file "$report_file"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$report_file"
+          fi

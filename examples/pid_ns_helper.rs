@@ -42,7 +42,24 @@ fn main() {
     // than an env var so it survives `sudo` -- see the note above.
     let release_marker = args.get(3).map(std::path::PathBuf::from);
 
-    match minigraf::Minigraf::open(path) {
+    // Validate the mode up front rather than falling through to a plain open
+    // for anything unrecognized: a typo'd or not-yet-implemented mode must
+    // fail loudly, not silently behave like "open".
+    if !["hold", "open", "open-unlocked"].contains(&mode.as_str()) {
+        eprintln!("unknown mode: {mode}");
+        std::process::exit(2);
+    }
+
+    let open_result = if mode == "open-unlocked" {
+        minigraf::OpenOptions::default()
+            .allow_unlocked(true)
+            .path(path)
+            .open()
+    } else {
+        minigraf::Minigraf::open(path)
+    };
+
+    match open_result {
         Ok(db) => {
             db.execute(r#"(transact [[:a :name "A"]])"#).ok();
             println!("OPEN_OK");
