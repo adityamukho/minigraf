@@ -6,6 +6,7 @@ use uuid::Uuid;
 const MAX_STRING_LENGTH: usize = 1024 * 1024; // 1MB
 const MAX_KEYWORD_LENGTH: usize = 1024; // 1KB
 const MAX_SYMBOL_LENGTH: usize = 1024; // 1KB
+const MAX_RECURSION_DEPTH: usize = 100;
 
 /// Tokenizer for EDN syntax
 #[derive(Debug, Clone, PartialEq)]
@@ -327,11 +328,16 @@ fn parse_symbol(
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -362,6 +368,20 @@ impl Parser {
     }
 
     fn parse_value(&mut self) -> Result<EdnValue, String> {
+        self.depth += 1;
+        if self.depth > MAX_RECURSION_DEPTH {
+            self.depth -= 1;
+            return Err(format!(
+                "Exceeded maximum recursion depth of {}",
+                MAX_RECURSION_DEPTH
+            ));
+        }
+        let result = self.parse_value_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_value_inner(&mut self) -> Result<EdnValue, String> {
         match self.peek() {
             Some(Token::LeftParen) => self.parse_list(),
             Some(Token::LeftBracket) => self.parse_vector(),
@@ -1933,6 +1953,14 @@ mod tests {
         let result = tokenize(&long_keyword);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn test_parse_edn_deep_nesting_returns_error() {
+        let deeply_nested = "(".repeat(10_000);
+        let result = parse_edn(&deeply_nested);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("recursion depth"));
     }
 
     #[test]

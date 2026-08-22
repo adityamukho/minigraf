@@ -104,26 +104,48 @@ jobs:
             datalog_eval=${{ steps.datalog_eval.outcome }}
         run: |
           report_file="fuzz-failure.md"
+          artifact_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           {
             echo "The nightly fuzz workflow found one or more failures."
             echo
-            echo "- Run and artifacts: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Run and artifacts: $artifact_url"
             echo "- Commit: $GITHUB_SHA"
             echo "- Target outcomes: $FAILED_TARGETS"
             echo "- Reproduce: \`cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<crash-file>\`"
+            echo "- Full logs: see the \`fuzz-failures-$GITHUB_RUN_ID\` artifact on the run above"
             echo
-            echo "## Fuzz logs"
+            echo "## Fuzz logs (failed targets only, last 100 lines each)"
             echo
-            for log in fuzz-*.log; do
+
+            IFS=',' read -ra target_outcomes <<< "$FAILED_TARGETS"
+            for entry in "${target_outcomes[@]}"; do
+              entry="$(echo "$entry" | xargs)"
+              target="${entry%%=*}"
+              outcome="${entry#*=}"
+              [ "$outcome" = "failure" ] || continue
+              log="fuzz-${target}.log"
               [ -e "$log" ] || continue
               echo "### $log"
               echo
               echo '```text'
-              tail -n 500 "$log"
+              tail -n 100 "$log"
               echo '```'
               echo
             done
           } > "$report_file"
+
+          # Defensive hard cap: GitHub issue/comment bodies max out at 65536 chars.
+          max_bytes=60000
+          if [ "$(wc -c < "$report_file")" -gt "$max_bytes" ]; then
+            head -c "$max_bytes" "$report_file" > "${report_file}.tmp"
+            {
+              echo
+              echo "..."
+              echo
+              echo "_Report truncated to fit GitHub's body size limit. See the run and artifact linked above for full logs._"
+            } >> "${report_file}.tmp"
+            mv "${report_file}.tmp" "$report_file"
+          fi
 
           existing_issue="$(gh issue list \
             --repo "$GITHUB_REPOSITORY" \
