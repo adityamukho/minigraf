@@ -25,10 +25,30 @@ fn count_results(r: QueryResult) -> usize {
 /// "Database is locked by another process", even though no other process
 /// was ever really involved. Capping this binary to one fork in flight at a
 /// time keeps that window rare enough not to flake the suite.
+///
+/// This is now belt-and-braces: `FileBackend::open_with` (src/storage/backend/file.rs)
+/// retries a cross-process `WouldBlock` with bounded backoff, which is the
+/// real fix for the false-negative window described above. This mutex is
+/// cheap insurance on top of that, not load-bearing on its own.
 static CRASH_CHILD_SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Runs a child process that opens `db_path`, executes `statements`, then dies
-/// by `abort()` without running any `Drop`.
+/// Whether the crashing child commits `statements` as one explicit
+/// transaction or as separate auto-committed writes.
+#[derive(Clone, Copy)]
+enum CrashTx {
+    /// Each statement is its own auto-committed `db.execute()` call — the
+    /// implicit-transaction path.
+    Implicit,
+    /// All statements run inside one `begin_write()` / `commit()` — pins
+    /// that `WriteTransaction::commit()` itself writes to the WAL before a
+    /// crash, and that multiple pending facts survive (or are lost) as one
+    /// atomic unit rather than as independent writes.
+    #[allow(dead_code)]
+    Explicit,
+}
+
+/// Runs a child process that opens `db_path`, applies `statements` (per
+/// `tx`), then dies by `abort()` without running any `Drop`.
 ///
 /// This is a real crash, not a simulated one: the child's file descriptors are
 /// closed by the kernel, which releases the file lock exactly as it would for a
@@ -38,19 +58,24 @@ fn run_crashing_child(
     db_path: &std::path::Path,
     wal_checkpoint_threshold: usize,
     statements: &[&str],
+    tx: CrashTx,
 ) {
     let exe = std::env::current_exe().expect("test binary path");
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(["crash_child_entrypoint", "--exact", "--nocapture"])
+        .env("MINIGRAF_CRASH_DB", db_path)
+        .env("MINIGRAF_CRASH_THRESHOLD", wal_checkpoint_threshold.to_string())
+        .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"));
+    if matches!(tx, CrashTx::Explicit) {
+        command.env("MINIGRAF_CRASH_TX", "1");
+    }
+
     let status = {
         let _guard = CRASH_CHILD_SPAWN_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::process::Command::new(exe)
-            .args(["crash_child_entrypoint", "--exact", "--nocapture"])
-            .env("MINIGRAF_CRASH_DB", db_path)
-            .env("MINIGRAF_CRASH_THRESHOLD", wal_checkpoint_threshold.to_string())
-            .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"))
-            .status()
-            .expect("spawn crash child")
+        command.status().expect("spawn crash child")
     };
 
     // On Unix `abort()` raises SIGABRT and `code()` is None. On Windows it
@@ -76,6 +101,7 @@ fn crash_child_entrypoint() {
         .parse()
         .expect("threshold is a number");
     let stmts = std::env::var("MINIGRAF_CRASH_STMTS").expect("statements");
+    let explicit_tx = std::env::var("MINIGRAF_CRASH_TX").is_ok();
 
     let db = Minigraf::open_with_options(
         &db_path,
@@ -86,8 +112,19 @@ fn crash_child_entrypoint() {
     )
     .expect("child opens db");
 
-    for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
-        db.execute(stmt).expect("child statement");
+    if explicit_tx {
+        // All statements commit together as one explicit transaction, so a
+        // crash right after `commit()` must recover either all of them or
+        // none of them -- not a subset.
+        let mut tx = db.begin_write().expect("child begin_write");
+        for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+            tx.execute(stmt).expect("child tx statement");
+        }
+        tx.commit().expect("child commit");
+    } else {
+        for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+            db.execute(stmt).expect("child statement");
+        }
     }
 
     // Die without running Drop, so no checkpoint happens and the WAL is left
@@ -176,7 +213,12 @@ fn wal_replay_after_migration_is_idempotent() {
     }
     // Crash before checkpoint: no Drop runs, so the WAL is left for the next
     // open to replay.
-    run_crashing_child(&path, 1000, &[r#"(transact [[:e2 :color "blue"]])"#]);
+    run_crashing_child(
+        &path,
+        1000,
+        &[r#"(transact [[:e2 :color "blue"]])"#],
+        CrashTx::Implicit,
+    );
     let db3 = Minigraf::open(&path).unwrap();
     let n = count_results(
         db3.execute("(query [:find ?c :where [?e :color ?c]])")

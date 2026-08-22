@@ -38,10 +38,16 @@ fn classify(result: Result<(), std::fs::TryLockError>, allow_unlocked: bool) -> 
 
 /// Canonicalised paths this process currently has open.
 ///
-/// Purely diagnostic. Correctness comes from the kernel lock; this only picks
-/// between two error messages. The distinction matters because #304 was
-/// misdiagnosed for a long time when the generic "another process" wording
-/// sent the investigation looking for a second process that did not exist.
+/// Correctness comes from the kernel lock, not this registry -- but this is
+/// no longer *purely* diagnostic. Two things read it: which error message to
+/// print (#304 was misdiagnosed for a long time when the generic "another
+/// process" wording sent the investigation looking for a second process that
+/// did not exist), and whether `open_with` retries a `WouldBlock` at all. A
+/// same-process conflict is unwinnable by waiting, so that decision skips the
+/// retry loop entirely; only this registry can tell the two cases apart. If
+/// `already_open_here` ever wrongly returned `true`, `open_with` would both
+/// report the wrong error *and* skip the retry that would have let it
+/// succeed.
 static OPEN_PATHS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
@@ -77,8 +83,9 @@ fn already_open_here(path: &Path) -> bool {
 /// commonly do) -- can observe `WouldBlock` during that few-microsecond
 /// window even though no other process is really contending for the file.
 /// SQLite has the same class of problem and solves it with `busy_timeout`;
-/// this is our version, bounded so a database that is genuinely locked still
-/// fails fast rather than hanging `open`.
+/// this is our version, bounded so a database that is genuinely locked by
+/// another process still fails -- after paying the full retry budget below,
+/// not instantly -- rather than `open` hanging indefinitely.
 const LOCK_RETRY_ATTEMPTS: u32 = 10;
 
 /// Initial backoff between retries, doubled each attempt up to
@@ -416,6 +423,125 @@ mod tests {
         drop(first);
         // Once the only handle is dropped, the kernel releases the lock.
         FileBackend::open(&temp_path).unwrap();
+    }
+
+    /// The child half of [`test_cross_process_lock_retries_then_fails_within_budget`]:
+    /// opens `db_path`, holds the lock for `MINIGRAF_HOLD_MILLIS`, signalling
+    /// readiness by creating `MINIGRAF_HOLD_READY_MARKER` right after
+    /// acquiring it. A no-op when the marker environment variable is absent
+    /// -- same convention as `tests/wal_test.rs`'s `crash_child_entrypoint`,
+    /// which this mirrors for the same reason: `#[cfg(test)]` items are
+    /// invisible outside this crate, so a real second process is the only
+    /// way to exercise a genuinely external lock holder.
+    #[test]
+    fn hold_lock_entrypoint() {
+        let Ok(db_path) = std::env::var("MINIGRAF_HOLD_DB") else {
+            return;
+        };
+        let ready_marker = std::env::var("MINIGRAF_HOLD_READY_MARKER").expect("ready marker");
+        let millis: u64 = std::env::var("MINIGRAF_HOLD_MILLIS")
+            .expect("hold millis")
+            .parse()
+            .expect("hold millis is a number");
+
+        let backend = FileBackend::open(&db_path).expect("child holds lock");
+        std::fs::write(&ready_marker, "").expect("write ready marker");
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+        drop(backend);
+        // Falling off the end of the test runs Drop normally (unlike the
+        // WAL crash tests, this one is not simulating a crash -- it is
+        // simulating an ordinary second process that is simply still open),
+        // which releases the kernel lock exactly as the retrying parent
+        // needs to see happen once its budget is spent... except the parent
+        // stops retrying before that, by design: see the driver test.
+    }
+
+    /// A genuinely cross-process lock must still refuse `open` -- with the
+    /// cross-process wording, not the same-process one -- and must do so
+    /// within the bounded retry budget rather than hang.
+    ///
+    /// This is the production-code counterpart to `LOCK_RETRY_ATTEMPTS`
+    /// and `LOCK_RETRY_MAX_DELAY`: nothing else on this branch spawns a
+    /// second process to hold the lock while another tries to open it, so
+    /// nothing else exercises either the cross-process error wording or the
+    /// bound on retry duration. Point (c) below matters beyond timing: if
+    /// `already_open_here` ever wrongly returned `true` for a path this
+    /// process does not actually have open, this is the only test that
+    /// would catch it -- everything else in this module opens and closes
+    /// within a single process.
+    #[test]
+    fn test_cross_process_lock_retries_then_fails_within_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test_cross_process_hold.graph");
+        let ready_marker = {
+            let mut p = db_path.clone().into_os_string();
+            p.push(".ready");
+            PathBuf::from(p)
+        };
+        let _ = std::fs::remove_file(&ready_marker);
+
+        let exe = std::env::current_exe().expect("test binary path");
+        let mut holder = std::process::Command::new(&exe)
+            .args([
+                "storage::backend::file::tests::hold_lock_entrypoint",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("MINIGRAF_HOLD_DB", &db_path)
+            .env("MINIGRAF_HOLD_READY_MARKER", &ready_marker)
+            // Comfortably longer than LOCK_RETRY_ATTEMPTS' ~375ms budget, so
+            // this process's retries must exhaust while the lock is still
+            // genuinely held.
+            .env("MINIGRAF_HOLD_MILLIS", "600")
+            .spawn()
+            .expect("spawn lock holder");
+
+        // Wait for the child to actually hold the lock before racing it --
+        // otherwise this test would be racing its own setup, not the retry.
+        let setup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready_marker.exists() {
+            assert!(
+                std::time::Instant::now() < setup_deadline,
+                "lock-holding child never signalled readiness"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let start = std::time::Instant::now();
+        let result = FileBackend::open(&db_path);
+        let elapsed = start.elapsed();
+
+        // (a) a real cross-process lock is still refused.
+        let msg = match result {
+            Ok(_) => panic!("a genuinely cross-process lock must be refused"),
+            Err(e) => e.to_string(),
+        };
+
+        // (b) the retry budget is bounded: this must fail well within a
+        // second, not hang for the holder's full 600ms hold plus margin.
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "retry budget must be bounded, not hang"
+        );
+
+        // (c) the error names the cross-process case, not the same-process
+        // one -- this process never had the path open.
+        assert!(
+            msg.contains("locked by another process"),
+            "must report the cross-process wording"
+        );
+        assert!(
+            !msg.contains("already open in this process"),
+            "must not report the same-process wording for a real second process"
+        );
+
+        // Once the holder exits, the lock -- and the holder's own registry
+        // entry, which only the holder's process could ever remove -- are
+        // both gone, so a fresh open succeeds without retrying at all.
+        holder.wait().expect("wait for lock holder");
+        FileBackend::open(&db_path).expect("open must succeed once the holder exits");
+
+        let _ = std::fs::remove_file(&ready_marker);
     }
 
     /// The refusal must not regress the sequential open/drop/reopen cycle that

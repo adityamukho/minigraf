@@ -26,10 +26,29 @@ use minigraf::db::{Minigraf, OpenOptions};
 /// "Database is locked by another process", even though no other process
 /// was ever really involved. Capping this binary to one fork in flight at a
 /// time keeps that window rare enough not to flake the suite.
+///
+/// This is now belt-and-braces: `FileBackend::open_with` (src/storage/backend/file.rs)
+/// retries a cross-process `WouldBlock` with bounded backoff, which is the
+/// real fix for the false-negative window described above. This mutex is
+/// cheap insurance on top of that, not load-bearing on its own.
 static CRASH_CHILD_SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Runs a child process that opens `db_path`, executes `statements`, then dies
-/// by `abort()` without running any `Drop`.
+/// Whether the crashing child commits `statements` as one explicit
+/// transaction or as separate auto-committed writes.
+#[derive(Clone, Copy)]
+enum CrashTx {
+    /// Each statement is its own auto-committed `db.execute()` call — the
+    /// implicit-transaction path.
+    Implicit,
+    /// All statements run inside one `begin_write()` / `commit()` — pins
+    /// that `WriteTransaction::commit()` itself writes to the WAL before a
+    /// crash, and that multiple pending facts survive (or are lost) as one
+    /// atomic unit rather than as independent writes.
+    Explicit,
+}
+
+/// Runs a child process that opens `db_path`, applies `statements` (per
+/// `tx`), then dies by `abort()` without running any `Drop`.
 ///
 /// This is a real crash, not a simulated one: the child's file descriptors are
 /// closed by the kernel, which releases the file lock exactly as it would for a
@@ -39,19 +58,24 @@ fn run_crashing_child(
     db_path: &std::path::Path,
     wal_checkpoint_threshold: usize,
     statements: &[&str],
+    tx: CrashTx,
 ) {
     let exe = std::env::current_exe().expect("test binary path");
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(["crash_child_entrypoint", "--exact", "--nocapture"])
+        .env("MINIGRAF_CRASH_DB", db_path)
+        .env("MINIGRAF_CRASH_THRESHOLD", wal_checkpoint_threshold.to_string())
+        .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"));
+    if matches!(tx, CrashTx::Explicit) {
+        command.env("MINIGRAF_CRASH_TX", "1");
+    }
+
     let status = {
         let _guard = CRASH_CHILD_SPAWN_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::process::Command::new(exe)
-            .args(["crash_child_entrypoint", "--exact", "--nocapture"])
-            .env("MINIGRAF_CRASH_DB", db_path)
-            .env("MINIGRAF_CRASH_THRESHOLD", wal_checkpoint_threshold.to_string())
-            .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"))
-            .status()
-            .expect("spawn crash child")
+        command.status().expect("spawn crash child")
     };
 
     // On Unix `abort()` raises SIGABRT and `code()` is None. On Windows it
@@ -77,6 +101,7 @@ fn crash_child_entrypoint() {
         .parse()
         .expect("threshold is a number");
     let stmts = std::env::var("MINIGRAF_CRASH_STMTS").expect("statements");
+    let explicit_tx = std::env::var("MINIGRAF_CRASH_TX").is_ok();
 
     let db = Minigraf::open_with_options(
         &db_path,
@@ -87,8 +112,19 @@ fn crash_child_entrypoint() {
     )
     .expect("child opens db");
 
-    for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
-        db.execute(stmt).expect("child statement");
+    if explicit_tx {
+        // All statements commit together as one explicit transaction, so a
+        // crash right after `commit()` must recover either all of them or
+        // none of them -- not a subset.
+        let mut tx = db.begin_write().expect("child begin_write");
+        for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+            tx.execute(stmt).expect("child tx statement");
+        }
+        tx.commit().expect("child commit");
+    } else {
+        for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+            db.execute(stmt).expect("child statement");
+        }
     }
 
     // Die without running Drop, so no checkpoint happens and the WAL is left
@@ -154,6 +190,7 @@ fn test_wal_recovery_after_simulated_crash() {
         &db_path,
         1_000_000,
         &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
     );
 
     // WAL must still exist (no checkpoint happened)
@@ -188,6 +225,7 @@ fn test_no_duplicate_facts_after_post_checkpoint_crash() {
         &db_path,
         usize::MAX,
         &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
     );
 
     // Back up the WAL before the next open checkpoints it away
@@ -239,6 +277,7 @@ fn test_partial_wal_entry_discarded_earlier_entries_intact() {
         &db_path,
         usize::MAX,
         &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
     );
 
     // Append garbage bytes after the valid WAL entry (simulate partial second write)
@@ -404,14 +443,14 @@ fn test_explicit_tx_all_or_nothing_commit() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("explicit_commit.graph");
 
-    // Session 1: explicit commit then crash.
-    //
-    // The crashing child can only replay statements through the implicit
-    // `db.execute()` path (see `run_crashing_child`), not through an
-    // explicit `begin_write`/`commit`, so it applies the same two facts as
-    // two auto-committed writes instead of one explicit transaction. What
-    // this test cares about — that committed data survives a crash before
-    // checkpoint — holds either way.
+    // Session 1: one explicit transaction with both facts, committed
+    // together, then crash before checkpoint. `CrashTx::Explicit` makes the
+    // child wrap both statements in a single `begin_write()` / `commit()`,
+    // so this pins two distinct things: that `WriteTransaction::commit()`
+    // itself writes to the WAL (not just the implicit per-statement
+    // `db.execute()` path, which `test_implicit_tx_execute_survives_replay`
+    // already covers), and that the commit is atomic as a unit — recovery
+    // below must see both facts together, never just one of them.
     run_crashing_child(
         &db_path,
         usize::MAX,
@@ -419,6 +458,7 @@ fn test_explicit_tx_all_or_nothing_commit() {
             r#"(transact [[:alice :name "Alice"]])"#,
             r#"(transact [[:bob :name "Bob"]])"#,
         ],
+        CrashTx::Explicit,
     );
 
     // Recovery session
@@ -557,6 +597,7 @@ fn test_implicit_tx_execute_survives_replay() {
         &db_path,
         usize::MAX,
         &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
     );
 
     // WAL must exist — no checkpoint fired.
@@ -587,7 +628,12 @@ fn write_wal_bytes(db_path: &std::path::Path, bytes: &[u8]) {
 fn setup_db_with_one_fact() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    run_crashing_child(&db_path, 1000, &[r#"(transact [[:e1 :name "Alice"]])"#]);
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[r#"(transact [[:e1 :name "Alice"]])"#],
+        CrashTx::Implicit,
+    );
     let wal_bytes = read_wal_bytes(&db_path);
     (dir, db_path, wal_bytes)
 }
@@ -643,6 +689,7 @@ fn wal_recover_bad_checksum_second_entry() {
             r#"(transact [[:e1 :name "Alice"]])"#,
             r#"(transact [[:e2 :name "Bob"]])"#,
         ],
+        CrashTx::Implicit,
     );
     let mut wal_bytes = read_wal_bytes(&db_path);
     assert!(wal_bytes.len() > 36, "WAL too short to corrupt");
@@ -663,11 +710,16 @@ fn wal_recover_bad_checksum_second_entry() {
 fn wal_recover_committed_tx_crash_before_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    // The child can only replay through `db.execute()`, not through an
-    // explicit `begin_write`/`commit`, so it applies this as an
-    // auto-committed write instead. What's under test — survival of
-    // committed data across a crash before checkpoint — holds either way.
-    run_crashing_child(&db_path, 1000, &[r#"(transact [[:e1 :name "Charlie"]])"#]);
+    // `CrashTx::Explicit` makes the child commit through
+    // `begin_write()`/`commit()`, pinning that an explicitly committed
+    // transaction (not just the implicit `db.execute()` path) survives a
+    // crash before checkpoint.
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[r#"(transact [[:e1 :name "Charlie"]])"#],
+        CrashTx::Explicit,
+    );
     let names = query_names(&db_path);
     assert_eq!(
         names.len(),
@@ -712,6 +764,7 @@ fn wal_recover_multiple_committed_corrupt_tail() {
             r#"(transact [[:e1 :name "Eve"]])"#,
             r#"(transact [[:e2 :name "Frank"]])"#,
         ],
+        CrashTx::Implicit,
     );
     let mut wal_bytes = read_wal_bytes(&db_path);
     wal_bytes.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00]);
@@ -728,7 +781,12 @@ fn wal_recover_multiple_committed_corrupt_tail() {
 fn wal_corrupt_tail_never_applied() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    run_crashing_child(&db_path, 1000, &[r#"(transact [[:e1 :name "Grace"]])"#]);
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[r#"(transact [[:e1 :name "Grace"]])"#],
+        CrashTx::Implicit,
+    );
     let mut wal_bytes = read_wal_bytes(&db_path);
     let mut fake_entry: Vec<u8> = Vec::new();
     fake_entry.extend_from_slice(&0u32.to_le_bytes());
