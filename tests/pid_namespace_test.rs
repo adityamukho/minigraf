@@ -67,6 +67,39 @@ fn spawn_in_namespace(prefix: &[String], helper: &Path, db: &Path, mode: &str) -
         .expect("spawn in namespace")
 }
 
+/// Kills and reaps the wrapped child on drop.
+///
+/// `std::process::Child` does not do this itself -- dropping a `Child`
+/// leaves the process running if it still is. Both tests below hold a
+/// "container A" child across an `assert!` before they get around to an
+/// explicit `kill`/`wait`; if that assert (or anything else) panics first,
+/// the panic unwinds straight past the explicit cleanup and orphans
+/// container A: PID 1 in its own namespace, part-way through a 300-second
+/// sleep, still holding the flock. `Deref`/`DerefMut` to `Child` let call
+/// sites keep using `.kill()`/`.wait()` exactly as before; this only adds a
+/// safety net for the unwind path.
+struct KillOnDrop(std::process::Child);
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Path to the compiled helper binary (see `examples/pid_ns_helper.rs`).
 fn helper_binary() -> std::path::PathBuf {
     // target/debug/examples/pid_ns_helper, resolved relative to the test binary
@@ -77,6 +110,29 @@ fn helper_binary() -> std::path::PathBuf {
     dir.join("examples").join("pid_ns_helper")
 }
 
+/// Fails loudly if the helper binary this environment could have run is
+/// missing, instead of silently skipping.
+///
+/// Call this only after `unshare_prefix()` has already returned `Some`: at
+/// that point this environment has proven it can create PID namespaces, so
+/// the one remaining reason `helper_binary()` could be absent is that
+/// `cargo build --examples` was not run -- a build problem the developer
+/// should see immediately, not a reason to assert nothing and report green.
+/// A skip is reserved for `unshare_prefix()` returning `None`, i.e. this
+/// environment genuinely cannot create PID namespaces at all.
+///
+/// This also guards against the assumption (verified by hand, not encoded
+/// anywhere else) that plain `cargo test` builds `examples/` before running
+/// integration tests: if a future cargo stops doing that, this test turns
+/// red and visible in CI instead of green and vacuous.
+fn require_helper_built(helper: &Path) {
+    assert!(
+        helper.exists(),
+        "helper binary not found at {}; run `cargo build --examples` first",
+        helper.display()
+    );
+}
+
 #[test]
 fn test_lock_survives_holder_death_in_another_pid_namespace() {
     let Some(prefix) = unshare_prefix() else {
@@ -84,16 +140,17 @@ fn test_lock_survives_holder_death_in_another_pid_namespace() {
         return;
     };
     let helper = helper_binary();
-    if !helper.exists() {
-        eprintln!("SKIP: helper not built; run `cargo build --examples` first");
-        return;
-    }
+    require_helper_built(&helper);
 
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("shared.graph");
 
-    // Container A: opens the database and holds it.
-    let mut a = spawn_in_namespace(&prefix, &helper, &db, "hold");
+    // Container A: opens the database and holds it. Wrapped so a panic
+    // unwinding past the explicit `kill`/`wait` below (e.g. the `assert!`
+    // right after this, on a namespace flake or a slow runner) still kills
+    // and reaps it instead of orphaning a namespaced holder sitting on the
+    // flock for its 300-second sleep.
+    let mut a = KillOnDrop(spawn_in_namespace(&prefix, &helper, &db, "hold"));
 
     // Wait for it to report that it holds the lock.
     let mut held = false;
@@ -130,15 +187,14 @@ fn test_two_live_namespaced_holders_are_still_refused() {
         return;
     };
     let helper = helper_binary();
-    if !helper.exists() {
-        eprintln!("SKIP: helper not built; run `cargo build --examples` first");
-        return;
-    }
+    require_helper_built(&helper);
 
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("contended.graph");
 
-    let mut a = spawn_in_namespace(&prefix, &helper, &db, "hold");
+    // See the comment on `KillOnDrop`: `a` must survive the `.expect` below
+    // panicking (B fails to spawn/run) without leaking a namespaced holder.
+    let mut a = KillOnDrop(spawn_in_namespace(&prefix, &helper, &db, "hold"));
     let mut held = false;
     for _ in 0..80 {
         if db.exists() && std::fs::metadata(&db).map(|m| m.len() > 0).unwrap_or(false) {
