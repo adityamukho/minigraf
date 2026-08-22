@@ -65,7 +65,10 @@ fn run_crashing_child(
     command
         .args(["crash_child_entrypoint", "--exact", "--nocapture"])
         .env("MINIGRAF_CRASH_DB", db_path)
-        .env("MINIGRAF_CRASH_THRESHOLD", wal_checkpoint_threshold.to_string())
+        .env(
+            "MINIGRAF_CRASH_THRESHOLD",
+            wal_checkpoint_threshold.to_string(),
+        )
         .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"));
     if matches!(tx, CrashTx::Explicit) {
         command.env("MINIGRAF_CRASH_TX", "1");

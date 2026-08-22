@@ -32,7 +32,13 @@ fn unshare_prefix() -> Option<Vec<String>> {
     .collect();
 
     let privileged: Vec<String> = [
-        "sudo", "-n", "unshare", "--pid", "--fork", "--mount-proc", "--kill-child",
+        "sudo",
+        "-n",
+        "unshare",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "--kill-child",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -55,7 +61,12 @@ fn unshare_prefix() -> Option<Vec<String>> {
 }
 
 /// Runs the helper binary at PID 1 in a fresh PID namespace.
-fn spawn_in_namespace(prefix: &[String], helper: &Path, db: &Path, mode: &str) -> std::process::Child {
+fn spawn_in_namespace(
+    prefix: &[String],
+    helper: &Path,
+    db: &Path,
+    mode: &str,
+) -> std::process::Child {
     Command::new(&prefix[0])
         .args(&prefix[1..])
         .arg(helper)
