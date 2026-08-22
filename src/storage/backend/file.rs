@@ -66,6 +66,31 @@ fn already_open_here(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// How many times to retry a cross-process `WouldBlock` before concluding
+/// another process genuinely holds the lock.
+///
+/// `Command::spawn` (in this process or any other) forks before exec'ing the
+/// child; until the child reaches `execve` and its close-on-exec descriptors
+/// close, it transiently holds a duplicate of every flock its parent has
+/// open. A concurrent `try_lock()` elsewhere -- another thread in this
+/// process, a sibling process, or bindings that shell out (Python/Node
+/// commonly do) -- can observe `WouldBlock` during that few-microsecond
+/// window even though no other process is really contending for the file.
+/// SQLite has the same class of problem and solves it with `busy_timeout`;
+/// this is our version, bounded so a database that is genuinely locked still
+/// fails fast rather than hanging `open`.
+const LOCK_RETRY_ATTEMPTS: u32 = 10;
+
+/// Initial backoff between retries, doubled each attempt up to
+/// `LOCK_RETRY_MAX_DELAY`.
+const LOCK_RETRY_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Backoff cap. With `LOCK_RETRY_ATTEMPTS` retries doubling from
+/// `LOCK_RETRY_INITIAL_DELAY` and capping here, the worst case is
+/// 5+10+20+40+50+50+50+50+50+50 = 375ms of total sleep -- comfortably longer
+/// than a fork-to-`execve` window, comfortably shorter than a human notices.
+const LOCK_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// File-based storage backend for native platforms.
 ///
 /// Stores graph data in a single `.graph` file with a page-based structure:
@@ -104,6 +129,11 @@ impl FileBackend {
     /// The kernel releases the lock when the process exits, however it exits,
     /// so a crashed holder never leaves the database unopenable (#317).
     ///
+    /// A `WouldBlock` from a possible cross-process conflict is retried with
+    /// bounded backoff (see `LOCK_RETRY_ATTEMPTS`) before being treated as a
+    /// real conflict, to ride out the transient window where a forked but
+    /// not-yet-exec'd subprocess holds a duplicate of someone else's lock.
+    ///
     /// Production code calls `open_with` directly. This wrapper survives as a
     /// convenience for the ~40 in-crate test call sites.
     #[cfg(test)]
@@ -130,7 +160,31 @@ impl FileBackend {
         // registry; if it fails we fall back to the generic message.
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
 
-        let path_guard = match classify(file.try_lock(), allow_unlocked) {
+        let mut lock_result = file.try_lock();
+
+        // Retry a `WouldBlock` with backoff, but ONLY when the conflict might
+        // be with another process. If this process already has the path
+        // open, waiting is pointless: we are the only thing that could ever
+        // release that lock, and we are standing right here not releasing
+        // it, so every retry would just burn the budget on a certain
+        // failure. Skipping this check keeps `test_second_open_in_same_process_is_refused`
+        // fast instead of paying the full retry budget on every same-process
+        // rejection.
+        if matches!(lock_result, Err(std::fs::TryLockError::WouldBlock))
+            && !already_open_here(&canonical)
+        {
+            let mut delay = LOCK_RETRY_INITIAL_DELAY;
+            for _ in 0..LOCK_RETRY_ATTEMPTS {
+                std::thread::sleep(delay);
+                lock_result = file.try_lock();
+                if !matches!(lock_result, Err(std::fs::TryLockError::WouldBlock)) {
+                    break;
+                }
+                delay = (delay * 2).min(LOCK_RETRY_MAX_DELAY);
+            }
+        }
+
+        let path_guard = match classify(lock_result, allow_unlocked) {
             LockOutcome::Acquired => {
                 if let Ok(mut open) = OPEN_PATHS.lock() {
                     open.insert(canonical.clone());
