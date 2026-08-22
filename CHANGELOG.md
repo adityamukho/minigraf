@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OpenOptions { wal_checkpoint_threshold: .., page_cache_size: .., .. }`
   without `..Default::default()` no longer compiles. Callers who spread
   `..Default::default()`, or who use the chainable builder methods, are
-  unaffected. This branch had to update three such literals in its own tree.
+  unaffected. This branch had to update two such literals in its own tree —
+  the `Default` impl itself and one test — and only the latter is a
+  "downstream literal" in the sense that matters to a consumer.
 
   Recorded here because the release decision is deliberately deferred, and
   whoever makes it needs the facts: this is the **first post-1.0 field

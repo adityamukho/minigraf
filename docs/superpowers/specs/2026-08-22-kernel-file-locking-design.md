@@ -149,7 +149,9 @@ torn backups.
 
 **NFS.** Linux emulates `flock` via `fcntl` since 2.6.37, which works on NFSv4 but
 needs `lockd` on NFSv3. The failure mode that matters is a lock that silently no-ops
-rather than erroring. Tier 2 testing exists specifically to detect this.
+rather than erroring. Tier 2 testing is designed specifically to detect this — but it is deferred to
+issue #324 and is NOT delivered by this branch, so the risk is unmitigated on
+merge. See the delivery note above.
 
 ### Compatibility
 
@@ -237,7 +239,7 @@ plus a fresh PID-1 process, which tier 1 already covers, and `kind` provisions
 
 | Risk | Mitigation |
 |---|---|
-| `flock` silently no-ops on some network filesystem | Tier 2 exists for this; fail closed on error |
+| `flock` silently no-ops on some network filesystem | **UNMITIGATED ON MERGE.** Tier 2 is designed for this but is deferred to #324. Fail-closed on error still applies, but a silent no-op returns `Ok(())` and so is not an error we can catch. |
 | GitHub runners block unprivileged `unshare` | `sudo unshare` fallback; test skips rather than fails |
 | MSRV 1.89 breaks a binding repo | Verify all 7 build on 1.89 before merge |
 | Windows mandatory locks break someone's backup flow | Documented as a platform difference in CHANGELOG and wiki |
