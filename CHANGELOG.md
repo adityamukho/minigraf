@@ -31,11 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `edition = "2024"`). Required for `std::fs::File::try_lock`, stabilised in
   1.89. Declared as `rust-version` in `Cargo.toml`, so cargo reports a clear
   error rather than a confusing one.
-- **On Windows, an open database can no longer be read by other processes.**
-  `LockFileEx` locks are mandatory rather than advisory, so copying or backing
-  up an open `.graph` file now fails on Windows where it previously succeeded.
-  Unix locks remain advisory and are unaffected. Close the database before
-  copying it — which also avoids a torn copy.
+- **On Windows, an open database can no longer be read through any other file
+  handle** — including another handle in the same process. `LockFileEx` locks
+  are mandatory rather than advisory and exclude every handle but the one
+  holding them, so copying or backing up an open `.graph` file now fails on
+  Windows where it previously succeeded, and so does opening it yourself for a
+  raw read while the database is live. The error is os error 33, "another
+  process has locked a portion of the file", even when the other process is
+  you. Unix locks remain advisory and are unaffected. Close the database
+  before reading the file directly — which also avoids a torn read.
 - **`open()` now fails on filesystems that cannot lock at all** rather than
   proceeding unprotected. Set `OpenOptions::allow_unlocked(true)` to accept the
   risk on single-writer deployments.

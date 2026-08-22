@@ -351,9 +351,24 @@ fn test_manual_checkpoint_deletes_wal() {
     );
     assert_eq!(n, 1, "Alice must still be visible after checkpoint");
 
+    // Nothing is pending after the checkpoint above (no WAL to lose), so a
+    // real crash and a normal close are observationally identical here.
+    // Dropping `db` releases the kernel file lock exactly as process death
+    // would — no subprocess is needed just to prove that.
+    drop(db);
+
     // Main file header must reflect the checkpoint.
     // Reads the raw bytes: version is at offset 4..8 (u32 LE),
     // last_checkpointed_tx_count is at offset 24..32 (u64 LE).
+    //
+    // This read has to come AFTER the drop above. Windows file locks are
+    // mandatory rather than advisory, and they exclude every other handle --
+    // including another handle in this same process. Reading the header
+    // through a second `File` while `db` still holds the lock fails on
+    // Windows with os error 33, "another process has locked a portion of the
+    // file", even though the "other process" is us. On Unix the lock is
+    // advisory and the read would succeed either way, which is exactly why
+    // this only ever failed on one leg of the CI matrix.
     {
         use std::io::Read;
         let mut f = std::fs::File::open(&db_path).unwrap();
@@ -365,12 +380,6 @@ fn test_manual_checkpoint_deletes_wal() {
             "last_checkpointed_tx_count must be set after checkpoint"
         );
     }
-
-    // Nothing is pending after the checkpoint above (no WAL to lose), so a
-    // real crash and a normal close are observationally identical here.
-    // Dropping `db` releases the kernel file lock exactly as process death
-    // would — no subprocess is needed just to prove that.
-    drop(db);
 
     // Reopen: must recover the fact from the main file alone (no WAL needed)
     let db2 = Minigraf::open(&db_path).unwrap();
