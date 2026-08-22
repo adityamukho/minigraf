@@ -80,10 +80,17 @@ fn already_open_here(path: &Path) -> bool {
 pub struct FileBackend {
     #[allow(dead_code)]
     path: PathBuf,
+    // `_path_guard` must drop before `file`: dropping `file` releases the
+    // kernel lock, and if the registry entry were still present after that,
+    // another thread in this process could win the lock and insert its own
+    // entry between the two drops -- which this guard would then delete,
+    // leaving the registry claiming "not open" while a live handle exists.
+    // Rust drops struct fields in declaration order, so this field must be
+    // declared before `file`.
+    _path_guard: PathGuard,
     file: File,
     header: FileHeader,
     is_new: bool,
-    _path_guard: PathGuard,
 }
 
 impl FileBackend {
@@ -154,7 +161,26 @@ impl FileBackend {
                     e
                 );
             }
-            LockOutcome::ProceedUnlocked => PathGuard(None),
+            LockOutcome::ProceedUnlocked => {
+                // There is no kernel lock in this arm, so the registry is not
+                // merely diagnostic here: it is the only thing standing
+                // between us and the #304 two-page-tables corruption if a
+                // second handle in this process opens the same unlockable
+                // path.
+                if already_open_here(&canonical) {
+                    anyhow::bail!(
+                        "Database is already open in this process ({}). A second handle \
+                         on one file would give each its own page table and corrupt both \
+                         — reuse the existing handle instead. `Minigraf` is cheap to clone \
+                         and all clones share the same database.",
+                        path.display()
+                    );
+                }
+                if let Ok(mut open) = OPEN_PATHS.lock() {
+                    open.insert(canonical.clone());
+                }
+                PathGuard(Some(canonical))
+            }
         };
 
         // Check file size using the open file handle's metadata.
@@ -367,19 +393,29 @@ mod tests {
     }
 
     /// The path registry must not leak entries: a refused open must leave the
-    /// set exactly as it found it, or a later legitimate open reports the
-    /// wrong error.
+    /// set exactly as it found it, so a later refusal still reports the
+    /// same-process case rather than degrading to the generic
+    /// "locked by another process" wording.
     #[test]
     fn test_refused_open_does_not_corrupt_path_registry() {
         let dir = tempfile::tempdir().unwrap();
         let temp_path = dir.path().join("test_minigraf_registry.graph");
 
         let first = FileBackend::open(&temp_path).unwrap();
-        assert!(FileBackend::open(&temp_path).is_err());
-        drop(first);
+        assert!(FileBackend::open(&temp_path).is_err()); // first refusal
 
-        // If the refused open had removed the path, or the guard had failed to,
-        // this would report the same-process case instead of succeeding.
+        // A refused open must not have removed first's registry entry: a
+        // second refusal must still see it and report the same-process case.
+        let msg = match FileBackend::open(&temp_path) {
+            Ok(_) => panic!("must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("already open in this process"),
+            "registry entry must survive a refused open"
+        );
+
+        drop(first);
         FileBackend::open(&temp_path).unwrap();
     }
 
