@@ -1,11 +1,11 @@
 # Minigraf Test Coverage Report
 
-**Last Updated**: v1.2.3 (August 2026) + Unreleased kernel file locking work, 1021 tests ✅
+**Last Updated**: v1.2.3 (August 2026) + Unreleased kernel file locking work, 1023 tests ✅
 
 ## Test Summary
 
-**Total Tests**: 1021 ✅ (1013 passing, 8 ignored)
-- ✅ 676 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, kernel file lock same-process exclusion and unsupported-filesystem classification #304 #317)
+**Total Tests**: 1023 ✅ (1015 passing, 8 ignored)
+- ✅ 678 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, kernel file lock same-process exclusion and unsupported-filesystem classification #304 #317, parser recursion depth bound #326, non-UTF-8-boundary temporal input #325)
 - ✅ 12 bi-temporal tests (integration)
 - ✅ 11 complex query tests (integration)
 - ✅ 9 recursive rules tests (integration)
@@ -39,7 +39,7 @@
 - ✅ 7 magic sets tests (integration, #289 — demand-driven recursive evaluation correctness: bound transitive closure, all-free closure, subset invariant, multi-hop, mutual recursion)
 - ✅ 15 doc tests (9 passing, 6 ignored: doc examples referencing internal types that cannot compile as standalone rustdoc tests)
 
-**Status**: ✅ **All 1013 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
+**Status**: ✅ **All 1015 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
 
 ## v1.2.2 Completion Status: ✅ COMPLETE
 
@@ -983,7 +983,7 @@ cargo test -- --nocapture
 - XTDB compatibility verified: 14 semantic ports covering EAV, time travel, negation, rules, prepared queries (Wave 3)
 - Datomic compatibility verified: 11 independently written semantic ports covering datom model, tx-time, retraction, Datalog patterns (Wave 3)
 - Same-process handle exclusion verified: a second open on a live file is refused rather than silently granted, which is what produced the intermittent `Page N out of bounds` (v1.2.2, #304)
-- 1021 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat + kernel file locking (including browser WASM + WASI + cross-platform compat + fuzzing CI)
+- 1023 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat + kernel file locking (including browser WASM + WASI + cross-platform compat + fuzzing CI)
 
 **Confidence Level**: ✅ **Production-ready for Wave 3 scope**
 
