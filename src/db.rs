@@ -629,9 +629,10 @@ impl Minigraf {
                 // The kernel file lock taken by FileBackend::open covers both a
                 // second process and a second handle in this one, since flock
                 // and OFD locks attach to the open file description. This guard
-                // remains for environments where the lock is unavailable and
-                // the caller set `allow_unlocked` (e.g.
-                // network filesystems, manual lock deletion).
+                // remains for environments where the filesystem cannot lock at all —
+                // for example, NFSv3 without lockd or some FUSE mounts — where the
+                // caller set `allow_unlocked` to accept that Minigraf cannot detect
+                // concurrent writers.
                 if *wal_entry_count == 0 && !pfs.is_dirty() {
                     return Ok(());
                 }

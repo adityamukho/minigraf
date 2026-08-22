@@ -103,6 +103,10 @@ impl FileBackend {
     /// both multi-process corruption and a second handle within this process.
     /// The kernel releases the lock when the process exits, however it exits,
     /// so a crashed holder never leaves the database unopenable (#317).
+    ///
+    /// Production code calls `open_with` directly. This wrapper survives as a
+    /// convenience for the ~40 in-crate test call sites.
+    #[cfg(test)]
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::open_with(path, false)
     }
