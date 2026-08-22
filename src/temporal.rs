@@ -16,7 +16,7 @@ use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 /// - Any string with a timezone offset (e.g., `+05:30`) — use UTC (Z) only.
 pub fn parse_timestamp(s: &str) -> Result<i64> {
     // Reject timezone offsets explicitly
-    if s.contains('+') || (s.len() > 10 && s[10..].contains('-')) {
+    if s.contains('+') || s.get(10..).is_some_and(|rest| rest.contains('-')) {
         return Err(anyhow!(
             "timezone offsets are not supported; use UTC (Z) timestamps only. \
              chrono's local timezone handling (GHSA-wcg3-cvx6-7396) is avoided by design."
@@ -89,6 +89,14 @@ mod tests {
     #[test]
     fn test_reject_invalid_string() {
         assert!(parse_timestamp("not-a-date").is_err());
+    }
+
+    #[test]
+    fn test_multibyte_char_near_byte_offset_10_does_not_panic() {
+        // Byte offset 10 falls inside the 2-byte UTF-8 encoding of '\u{605}',
+        // which starts at byte 9. Slicing s[10..] would panic on a non-char-boundary.
+        let s = "123456789\u{605}abc";
+        assert!(parse_timestamp(s).is_err());
     }
 
     #[test]
