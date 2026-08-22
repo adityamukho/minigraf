@@ -81,6 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still depend on it. Running mixed versions against one file is not
   supported; upgrade all writers together.
 
+  Reported and diagnosed by [@ocasazza](https://github.com/ocasazza) in #317,
+  who supplied the reproduction, identified the PID-namespace mechanism, and
+  correctly traced the refusal back to the #304 fix that caused it. That
+  analysis is what made this straightforward to verify. One of the tests from
+  their proposed patch is the ancestor of the regression test that now covers
+  this.
+
 - **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.
 
 ## v1.2.3 — 2026-08-10
