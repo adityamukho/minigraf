@@ -7,7 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Breaking-ish changes
+
+- **Adding `OpenOptions::allow_unlocked` breaks struct-literal construction.**
+  `OpenOptions` has all-public fields and is not `#[non_exhaustive]`, so under
+  Rust's semver rules any downstream code building it as
+  `OpenOptions { wal_checkpoint_threshold: .., page_cache_size: .., .. }`
+  without `..Default::default()` no longer compiles. Callers who spread
+  `..Default::default()`, or who use the chainable builder methods, are
+  unaffected. This branch had to update two such literals in its own tree —
+  the `Default` impl itself and one test — and only the latter is a
+  "downstream literal" in the sense that matters to a consumer.
+
+  Recorded here because the release decision is deliberately deferred, and
+  whoever makes it needs the facts: this is the **first post-1.0 field
+  addition** to `OpenOptions`. The earlier `max_derived_facts` and
+  `max_results` fields landed in v0.19.0, before 1.0, so they set no
+  precedent under the stability guarantee in PHILOSOPHY.md §7. Marking
+  `OpenOptions` `#[non_exhaustive]` would immunise every future field
+  addition, but is itself a breaking change, so it is a decision to make at
+  the same time as the version number rather than after it.
+- **Minimum supported Rust version is now 1.89** (was effectively 1.85, implied
+  by `edition = "2024"`). Required for `std::fs::File::try_lock`, stabilised in
+  1.89. Declared as `rust-version` in `Cargo.toml`, so cargo reports a clear
+  error rather than a confusing one.
+- **On Windows, an open database can no longer be read through any other file
+  handle** — including another handle in the same process. `LockFileEx` locks
+  are mandatory rather than advisory and exclude every handle but the one
+  holding them, so copying or backing up an open `.graph` file now fails on
+  Windows where it previously succeeded, and so does opening it yourself for a
+  raw read while the database is live. The error is os error 33, "another
+  process has locked a portion of the file", even when the other process is
+  you. Unix locks remain advisory and are unaffected. Close the database
+  before reading the file directly — which also avoids a torn read.
+- **`open()` now fails on filesystems that cannot lock at all** rather than
+  proceeding unprotected. Set `OpenOptions::allow_unlocked(true)` to accept the
+  risk on single-writer deployments.
+- **A database genuinely locked by another process now reports its error
+  later than before** — about 375ms later. `FileBackend::open_with` retries a
+  cross-process `WouldBlock` up to 10 times with backoff doubling from 5ms and
+  capped at 50ms before concluding another process holds the lock. This exists
+  because `fork` transiently duplicates the lock-holding descriptor into a
+  child until `execve` closes its close-on-exec descriptors, so any process
+  that spawns subprocesses — the normal pattern for the Python and Node
+  bindings — could see a spurious `WouldBlock` from its own child. SQLite
+  solves the same problem with `busy_timeout`; this is the same idea, bounded
+  so a real conflict still fails, just not instantly. A same-process conflict
+  (this process already holds the file open) is unaffected: it fails
+  immediately, since waiting could never help.
+- **A refused open on a filesystem that cannot lock may leave a 0-byte
+  `.graph` file behind.** The file must exist before it can be locked, so the
+  create-then-lock ordering now creates before it can know the lock will be
+  refused. Harmless — the next open sees `is_new` and initialises normally —
+  but worth knowing if you inspect the filesystem after a failed open.
+
 ### Bug fixes
+
+- **A `.graph` file is no longer bricked when its holder dies in a container**
+  (#317): `FileLock` recorded the holder's PID in a `.graph.lock` sidecar and
+  refused to open when that PID equalled our own. Every container's main process
+  is PID 1 in its own namespace, so a container killed with SIGKILL left the
+  sidecar holding `1`, and the replacement container — also PID 1 — read its own
+  PID back and refused. The refusal was permanent; no code path could clear it,
+  and an operator had to delete the file by hand. The `pid == our_pid` refusal
+  was itself the fix for #304, so the two defects were entangled.
+
+  A PID cannot serve as a liveness token: it is not unique across PID namespaces
+  and is recycled within one. The sidecar is gone, and the lock now lives in the
+  kernel via `std::fs::File::try_lock` on the `.graph` file itself. The kernel
+  releases it whenever the process exits, however it exits, so a crashed holder
+  leaves nothing behind. Because `flock` and OFD locks attach to the open file
+  description rather than the process, a second open within one process is also
+  denied, so #304 stays fixed with no PID bookkeeping at all.
+
+  A leftover `.graph.lock` from a version before 1.3 is ignored and never
+  deleted — it no longer has any effect, and a still-running old process may
+  still depend on it. Running mixed versions against one file is not
+  supported; upgrade all writers together.
+
+  Reported and diagnosed by [@ocasazza](https://github.com/ocasazza) in #317,
+  who supplied the reproduction, identified the PID-namespace mechanism, and
+  correctly traced the refusal back to the #304 fix that caused it. That
+  analysis is what made this straightforward to verify. One of the tests from
+  their proposed patch is the ancestor of the regression test that now covers
+  this.
 
 - **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.
 

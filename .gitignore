@@ -4,12 +4,14 @@
 
 .idea
 .worktrees/
+.superpowers/
 .codex
 .opencode/
 .claude/
 .mcp.json
 skills/
 memory.graph
+memory.graph.fts.sqlite3*
 
 # heaptrack profiling artifacts
 heaptrack.*.zst

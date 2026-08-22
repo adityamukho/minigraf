@@ -1,16 +1,17 @@
 # Minigraf Test Coverage Report
 
-**Last Updated**: v1.2.3 (August 2026), 998 tests ✅
+**Last Updated**: v1.2.3 (August 2026) + Unreleased kernel file locking work, 1023 tests ✅
 
 ## Test Summary
 
-**Total Tests**: 998 ✅ (990 passing, 8 ignored)
-- ✅ 663 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, FileLock same-process exclusion #304)
+**Total Tests**: 1023 ✅ (1015 passing, 8 ignored)
+- ✅ 678 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, kernel file lock same-process exclusion and unsupported-filesystem classification #304 #317, parser recursion depth bound #326, non-UTF-8-boundary temporal input #325)
 - ✅ 12 bi-temporal tests (integration)
 - ✅ 11 complex query tests (integration)
 - ✅ 9 recursive rules tests (integration)
 - ✅ 12 concurrency tests (integration, 1 ignored: nightly stress)
-- ✅ 21 WAL / crash recovery tests (integration)
+- ✅ 22 WAL / crash recovery tests (integration)
+- ✅ 2 PID namespace tests (integration, #317 — kernel lock survives a holder killed at PID 1 in another namespace; skips rather than fails where `unshare` is unavailable)
 - ✅ 2 cross-platform compat tests (integration, Phase 8.1)
 - ✅ 6 index tests (integration, Phase 6.1)
 - ✅ 7 performance tests (integration, Phase 6.2/6.4b)
@@ -29,25 +30,25 @@
 - ✅ 10 UDF tests (integration, Phase 7.7b — custom aggregates, custom predicates, UDF as window function, name collision guards, runtime errors, thread safety)
 - ✅ 17 prepared statement tests (integration, Phase 7.8 — entity/value/as-of/valid-at slots, combined temporal+entity, AnyValidTime, error paths, plan reuse)
 - ✅ 3 grammar conformance tests (integration, Phase 7.9 — pest shadow grammar + EDN corpus)
-- ✅ 5 migration matrix tests (integration, Wave 3 #215 — v7 round-trip, v3 empty migrate, corrupt magic, unsupported version, WAL replay idempotent)
+- ✅ 6 migration matrix tests (integration, Wave 3 #215 — v7 round-trip, v3 empty migrate, corrupt magic, unsupported version, WAL replay idempotent)
 - ✅ 5 index corruption tests (integration, Wave 3 #216 — checksum corruption, btree leaf/internal no-panic, root pointer mismatch, non-critical corruption query check)
 - ✅ 3 property-based tests (integration, Wave 3 #212/#213/#219 — proptest Datalog correctness vs naive reference evaluator)
 - ✅ 1 long-haul smoke test (integration, Wave 3 #220 — 500 entities × 10 attrs × 10 cycles; ignored: nightly)
-- ✅ 10 XTDB compat tests (integration, Wave 3 #221 — Apache 2.0 semantic ports of XTDB concepts)
-- ✅ 9 Datomic compat tests (integration, Wave 3 #221 — independently written semantic ports of Datomic concepts)
+- ✅ 14 XTDB compat tests (integration, Wave 3 #221 — Apache 2.0 semantic ports of XTDB concepts)
+- ✅ 11 Datomic compat tests (integration, Wave 3 #221 — independently written semantic ports of Datomic concepts)
 - ✅ 7 magic sets tests (integration, #289 — demand-driven recursive evaluation correctness: bound transitive closure, all-free closure, subset invariant, multi-hop, mutual recursion)
 - ✅ 15 doc tests (9 passing, 6 ignored: doc examples referencing internal types that cannot compile as standalone rustdoc tests)
 
-**Status**: ✅ **All 990 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
+**Status**: ✅ **All 1015 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
 
 ## v1.2.2 Completion Status: ✅ COMPLETE
 
 **v1.2.2 issues**: #312 (lexicographic string comparison in predicates), #304 (two handles on one file in the same process)
 
 **New tests added by v1.2.2** (+3 storage-backend, +4 predicate-expression, +2 magic-sets):
-- ✅ `src/storage/backend/file.rs` — 3 FileLock unit tests: same-process second open refused, sequential reopen-after-drop still works, dead *other* process's lock still reclaimed (procfs-gated, since `is_process_alive` errs towards "alive" without `/proc`)
+- ✅ `src/storage/backend/file.rs` — lock unit tests: same-process second open refused (#304), cross-process `WouldBlock` retried then failed within budget, sequential reopen-after-drop, leftover v1.2.x sidecar ignored and preserved, path registry not corrupted by a refused open, plus 4 `classify` tests covering the unsupported-filesystem branch in both `allow_unlocked` settings
 - ✅ `tests/predicate_expr_test.rs` — string ordering via `<`, `>`, `<=`, `>=`; mixed-type and NaN behaviour pinned
-- ✅ Crash-simulation idiom corrected across `tests/wal_test.rs` (13 sites) and `tests/migration_matrix_test.rs`: `mem::forget` skips `FileLock::drop`, leaving the sidecar lock holding our *own* (live) pid, which is not what a crash leaves behind. Those sites now clear the lock so the reopen models a crashed holder rather than depending on minigraf treating a live lock as stale.
+- ✅ Crash simulation uses a real child process that `abort()`s (`run_crashing_child`), replacing the former `mem::forget` idiom. `mem::forget` leaks the `File`, so the kernel lock stays held for the life of the test process; only real process death releases it, which is also what production does.
 
 ---
 
@@ -502,14 +503,33 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - Rule Registry: ~95% (6 tests)
 - Recursive Evaluator: ~95% (10 tests)
 
-### 12. Storage Backends (`src/storage/backend/`) - ✅ Good (11 tests)
+### 12. Storage Backends (`src/storage/backend/`) - ✅ Good (18 tests)
 
 - ✅ FileBackend create/write/read, persistence across close/reopen
 - ✅ MemoryBackend write/read, error handling
-- ✅ **FileLock same-process exclusion** (#304): a second open while a handle is live is refused with an error naming the same-process case — two `FileBackend`s on one file each cache their own `header.page_count` and corrupt each other
-- ✅ FileLock refusal leaves the existing lock in place; dropping the only handle releases it
+- ✅ **Same-process exclusion** (#304): a second open while a handle is live is refused, enforced by the kernel — `flock`/OFD locks attach to the open file description, not the process
+- ✅ **Holder death across PID namespaces** (#317): `tests/pid_namespace_test.rs` runs two processes at PID 1 in separate namespaces via `unshare`; the survivor opens after the holder is killed, and two live holders are still refused
 - ✅ Sequential open → drop → reopen still works (the per-commit cycle downstream callers rely on)
-- ✅ A lock held by a *different*, dead process is still reclaimed (procfs-gated)
+- ✅ A cross-process `WouldBlock` is retried with bounded backoff before being treated as a real conflict, and still fails once the retry budget is spent
+- ✅ A leftover v1.2.x `.graph.lock` sidecar is ignored and left untouched
+- ✅ A refused open does not corrupt the in-process open-path registry
+- ✅ `classify` (unsupported-filesystem branch) fails closed by default and proceeds when `allow_unlocked` is set, in both cases regardless of a live `WouldBlock`
+
+**Note on counting these tests**: `hold_lock_entrypoint` (`src/storage/backend/file.rs`)
+and `crash_child_entrypoint` (`tests/wal_test.rs`, `tests/migration_matrix_test.rs`) are
+re-exec entry points, not ordinary tests — the parent test spawns the current test binary
+as a child process (`storage::backend::file::tests::hold_lock_entrypoint --exact
+--nocapture`) so a genuinely external process holds the lock, since `#[cfg(test)]` items
+are invisible across process boundaries. `crash_child_entrypoint` `abort()`s before the
+harness can print a summary, so it leaves no trace in `cargo test` output. `hold_lock_entrypoint`
+exits normally instead (it is simulating an ordinary second process, not a crash), so its
+own child-process test harness prints a stray `test result: ok. 1 passed; 0 failed;
+0 ignored; 0 measured; 675 filtered out` line, interleaved into the parent run's output.
+That line is easy to mistake for a second, smaller test run of the whole `lib` binary —
+it is not; it is one test's child process reporting on itself. Exclude it when totalling
+`cargo test` output: `grep "^test result:" | grep -vE "[1-9][0-9]* filtered out"`
+drops any line with a nonzero filtered-out count, keeping only the 34 real per-binary
+summaries.
 
 **Coverage**: ~85%
 
@@ -551,10 +571,10 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ Valid-at inside/outside/boundary, default filter, any-valid-time
 - ✅ Combined bi-temporal (both dimensions), multi-entity valid ranges
 
-### WAL / Crash Recovery (`tests/wal_test.rs`) - ✅ 21 tests
+### WAL / Crash Recovery (`tests/wal_test.rs`) - ✅ 22 tests
 
 - ✅ Basic persistence (file-backed transact and query)
-- ✅ WAL replay after `mem::forget` crash simulation (the sidecar lock is cleared alongside, so the reopen models a crashed holder rather than a live one — #304)
+- ✅ WAL replay after real subprocess crash (`run_crashing_child`) — the kernel releases the lock when the child aborts, so the reopen models a genuinely crashed holder (#304, #317)
 - ✅ Stale WAL dedup via `last_checkpointed_tx_count`
 - ✅ Corrupt/partial entry discard on recovery
 - ✅ Manual checkpoint clears WAL and updates header
@@ -696,13 +716,13 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ `execute_with_extra_bindings` — extra `BindValue`s beyond declared slots are silently ignored
 - ✅ `multiple_slots_same_execute` — multiple distinct `$slot` names resolved in a single `execute()` call
 
-### Migration Matrix (`tests/migration_matrix_test.rs`) - ✅ 5 tests (Wave 3 #215)
+### Migration Matrix (`tests/migration_matrix_test.rs`) - ✅ 6 tests (Wave 3 #215)
 
 - ✅ v7 round-trip — facts written and read back correctly after save/load
 - ✅ v3 empty migrate — empty v3 database opens and migrates to v7 cleanly
 - ✅ corrupt magic — file with bad magic header returns `Err`, not panic
 - ✅ unsupported version — file with unrecognised format version returns `Err`
-- ✅ WAL replay idempotent — replaying a WAL twice produces the same result as replaying once (crash simulated by `mem::forget` plus clearing the sidecar lock — #304)
+- ✅ WAL replay idempotent — replaying a WAL twice produces the same result as replaying once (crash simulated by real subprocess crash via `run_crashing_child` — #304, #317)
 
 ### Index Corruption (`tests/index_corruption_test.rs`) - ✅ 5 tests (Wave 3 #216)
 
@@ -722,20 +742,24 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 
 - ✅ `smoke_large_graph_10_cycles` — 500 entities × 10 attributes × 10 update cycles; 7 invariants verified: active count (333), retracted count, fact count bounds, temporal snapshot integrity, prepared query consistency, rule transitive closure, WAL checkpoint round-trip
 
-### XTDB Compatibility (`tests/xtdb_compat_test.rs`) - ✅ 10 tests (Wave 3 #221)
+### XTDB Compatibility (`tests/xtdb_compat_test.rs`) - ✅ 14 tests (Wave 3 #221)
 
-- ✅ `xtdb_eav_triple_model` — entity attributes are independent queryable facts
-- ✅ `xtdb_transaction_time_as_of` — `:as-of` by tx_count matches XTDB transaction-time semantics
-- ✅ `xtdb_valid_time_travel` — `:valid-at` point-in-time filter matches XTDB valid-time semantics
-- ✅ `xtdb_retraction_current_view` — retracted facts absent from current-time view
-- ✅ `xtdb_retraction_historical_view` — retracted facts visible in pre-retraction snapshot
-- ✅ `xtdb_datalog_join` — multi-pattern join matches XTDB Datalog query semantics
-- ✅ `xtdb_datalog_negation` — `not` clause matches XTDB negation semantics
-- ✅ `xtdb_recursive_rules` — recursive rule transitive closure matches XTDB rule semantics
-- ✅ `xtdb_parameterized_query` — prepared-statement `$slot` bindings match XTDB `:in` semantics
-- ✅ `xtdb_bitemporal_combined` — combined `:as-of` + `:valid-at` query matches XTDB bi-temporal semantics
+- ✅ `xtdb_basic_find_by_attribute_value` — finds all entities with a given attribute value (`:profession "painter"`)
+- ✅ `xtdb_multi_attribute_join` — multi-pattern join returns only entities satisfying both patterns (`:role "admin"` and `:active true`)
+- ✅ `xtdb_entity_reference_join` — entities sharing a reference-valued attribute (`:dept :dept-eng`) are found by pattern match
+- ✅ `xtdb_retraction_removes_specific_fact` — retracting one fact leaves other facts on the same entity intact
+- ✅ `xtdb_retracted_fact_not_visible` — a retracted fact is absent from the current-time query result
+- ✅ `xtdb_as_of_returns_past_state` — `:as-of` by tx_count returns the value that held before a later retract+transact pair
+- ✅ `xtdb_valid_at_query` — `:valid-at` finds a fact inside its `:valid-from`/`:valid-to` range and excludes it outside
+- ✅ `xtdb_not_excludes_matching_entities` — `not` clause excludes entities that also match a second pattern (banned flag)
+- ✅ `xtdb_count_aggregate` — `(count ?e)` aggregate returns the correct tally for a filtered pattern
+- ✅ `xtdb_recursive_ancestor_rule` — recursive rule computes transitive ancestor closure over a parent chain
+- ✅ `xtdb_attribute_keyword_may_end_in_question_mark` — predicate-style keyword attribute (`:artist/dead?`) is queryable and binds correctly by value (regression: `?` used to terminate the keyword token)
+- ✅ `xtdb_keyword_value_may_end_in_question_mark` — a keyword value ending in `?` (`:ready?`) round-trips through storage and matches both by value and by binding
+- ✅ `xtdb_retract_predicate_named_attribute` — retraction targets a predicate-named attribute correctly, leaving sibling facts on the same entity intact
+- ✅ `xtdb_valid_time_query_over_predicate_named_attribute` — `:valid-at` filtering works over a predicate-named attribute the same as any other
 
-### Datomic Compatibility (`tests/datomic_compat_test.rs`) - ✅ 9 tests (Wave 3 #221)
+### Datomic Compatibility (`tests/datomic_compat_test.rs`) - ✅ 11 tests (Wave 3 #221)
 
 - ✅ `datomic_entity_attributes_are_independent_facts` — EAV datom model: each attribute independently queryable
 - ✅ `datomic_multiple_entities_same_attribute` — multiple entities share the same attribute; all (entity, value) pairs returned
@@ -746,6 +770,8 @@ All Phase 8 sub-phases complete. See per-phase sections below.
 - ✅ `datomic_parameterized_query_prepared` — prepared `$slot` bindings match Datomic `:in` clause semantics
 - ✅ `datomic_named_rule_reuse` — named reusable rules match Datomic rule semantics
 - ✅ `datomic_predicate_expression_filter` — predicate expression `[(>= ?a 18)]` matches Datomic expression clause semantics
+- ✅ `datomic_attribute_keyword_may_end_in_question_mark` — predicate-style keyword attribute (`:person/alive?`) is queryable and binds correctly by value (regression: `?` used to terminate the keyword token)
+- ✅ `datomic_keyword_value_may_end_in_question_mark` — a keyword value ending in `?` (`:ready?`) matches by value and round-trips through storage
 
 ---
 
@@ -870,7 +896,6 @@ covered above.
 
 ### Known Limitations
 - ⏳ Crash during checkpoint write (safe by construction — WAL not deleted until save succeeds; covered indirectly by the Wave 3 checkpoint-atomicity fault-injection tests)
-- ⏳ Stale-lock reclamation is procfs-only: without `/proc`, `is_process_alive` cannot distinguish a dead pid from a live one and deliberately errs towards "alive", so a crashed holder's lock must be removed by hand on macOS and Windows (#304)
 - ⏳ Known `not-join` limitation: when a rule B positively invokes rule A and both are stratum 0, single-pass mixed-rule evaluation means B may not see A's derived facts unless rules are declared in dependency order
 - ⏳ `matches?` pattern compiled per-row (no caching); will be optimised in Phase 7.9b (`FunctionRegistry`)
 
@@ -914,8 +939,8 @@ cargo test --test migration_matrix_test    # migration matrix (5)
 cargo test --test index_corruption_test    # index corruption (5)
 cargo test --test cross_platform_compat_test # cross-platform compat (2)
 cargo test --test property_test            # property-based (3)
-cargo test --test xtdb_compat_test         # XTDB compat (10)
-cargo test --test datomic_compat_test      # Datomic compat (9)
+cargo test --test xtdb_compat_test         # XTDB compat (14)
+cargo test --test datomic_compat_test      # Datomic compat (11)
 cargo test --test smoke_test -- --include-ignored  # long-haul smoke (1, nightly)
 
 # Run with output
@@ -931,7 +956,7 @@ cargo test -- --nocapture
 **Test Quality**: ✅ **Excellent** — High confidence in all Phase 3-8.1 + Wave 3 reliability features
 
 **Strengths**:
-- WAL crash safety verified with real `mem::forget` simulation
+- WAL crash safety verified with a real subprocess crash (`run_crashing_child`)
 - Both implicit and explicit transaction write paths verified
 - Thread safety proven with Barrier-synchronized concurrent tests
 - Index persistence and CRC32 sync check verified
@@ -955,10 +980,10 @@ cargo test -- --nocapture
 - Index corruption resilience verified: checksum corruption triggers rebuild, btree corruption returns Err not panic (Wave 3)
 - Property-based testing verified: EAV model, bi-temporal monotonicity, retract visibility (Wave 3)
 - Long-haul smoke verified: 500 entities × 10 attrs × 10 cycles, 7 invariants, nightly CI (Wave 3)
-- XTDB compatibility verified: 10 semantic ports covering EAV, time travel, negation, rules, prepared queries (Wave 3)
-- Datomic compatibility verified: 9 independently written semantic ports covering datom model, tx-time, retraction, Datalog patterns (Wave 3)
+- XTDB compatibility verified: 14 semantic ports covering EAV, time travel, negation, rules, prepared queries (Wave 3)
+- Datomic compatibility verified: 11 independently written semantic ports covering datom model, tx-time, retraction, Datalog patterns (Wave 3)
 - Same-process handle exclusion verified: a second open on a live file is refused rather than silently granted, which is what produced the intermittent `Page N out of bounds` (v1.2.2, #304)
-- 998 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat (including browser WASM + WASI + cross-platform compat + fuzzing CI)
+- 1023 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat + kernel file locking (including browser WASM + WASI + cross-platform compat + fuzzing CI)
 
 **Confidence Level**: ✅ **Production-ready for Wave 3 scope**
 

@@ -73,6 +73,16 @@ pub struct OpenOptions {
     pub max_derived_facts: usize,
     /// Maximum total query results. Defaults to 1_000_000.
     pub max_results: usize,
+    /// Open even when the filesystem cannot lock files at all.
+    ///
+    /// Defaults to `false`, which refuses to open rather than run without the
+    /// protection the lock provides. Set this only when you know the database
+    /// has a single writer by other means — for example an NFSv3 mount with no
+    /// `lockd`, where locking is unavailable rather than merely contended.
+    ///
+    /// This does **not** override a lock that another handle actually holds.
+    /// Opening a database twice is refused regardless of this setting.
+    pub allow_unlocked: bool,
 }
 
 impl Default for OpenOptions {
@@ -82,6 +92,7 @@ impl Default for OpenOptions {
             page_cache_size: 256,
             max_derived_facts: DEFAULT_MAX_DERIVED_FACTS,
             max_results: DEFAULT_MAX_RESULTS,
+            allow_unlocked: false,
         }
     }
 }
@@ -115,6 +126,14 @@ impl OpenOptions {
     /// Defaults to 1_000_000. Use lower values to limit result set size.
     pub fn max_results(mut self, n: usize) -> Self {
         self.max_results = n;
+        self
+    }
+
+    /// Open even when the filesystem cannot lock files. See
+    /// [`OpenOptions::allow_unlocked`] for when this is appropriate.
+    #[must_use]
+    pub fn allow_unlocked(mut self, allow: bool) -> Self {
+        self.allow_unlocked = allow;
         self
     }
 
@@ -290,7 +309,7 @@ impl Minigraf {
         let db_path = path.as_ref().to_path_buf();
 
         // Open the main .graph file
-        let backend = FileBackend::open(&db_path)?;
+        let backend = FileBackend::open_with(&db_path, opts.allow_unlocked)?;
         let pfs = PersistentFactStorage::new(backend, opts.page_cache_size)?;
 
         // Share the fact storage
@@ -607,13 +626,13 @@ impl Minigraf {
                 // replayed WAL entries on open (crash-recovery path). `pfs.is_dirty()`
                 // catches any facts marked dirty via the normal write path.
                 //
-                // File locking (`.graph.lock` sidecar, acquired by FileBackend::open)
-                // already prevents a second *process* from opening the file while this
-                // handle holds the lock, which covers the main multi-process exposure
-                // described in issue #226. This guard closes the remaining edge cases:
-                // same-process double-opens (same PID bypasses the stale-lock check)
-                // and environments where the advisory lock can be bypassed (e.g.
-                // network filesystems, manual lock deletion).
+                // The kernel file lock taken by FileBackend::open covers both a
+                // second process and a second handle in this one, since flock
+                // and OFD locks attach to the open file description. This guard
+                // remains for environments where the filesystem cannot lock at all —
+                // for example, NFSv3 without lockd or some FUSE mounts — where the
+                // caller set `allow_unlocked` to accept that Minigraf cannot detect
+                // concurrent writers.
                 if *wal_entry_count == 0 && !pfs.is_dirty() {
                     return Ok(());
                 }
@@ -1539,6 +1558,7 @@ mod tests {
             page_cache_size: 256,
             max_derived_facts: 100_000,
             max_results: 1_000_000,
+            allow_unlocked: false,
         };
         let db = Minigraf::open_with_options(&path, opts).unwrap();
         assert_eq!(db.inner.options.wal_checkpoint_threshold, 5);
@@ -1899,6 +1919,32 @@ mod tests {
             len_before,
             "file size must not change after read-only handle drop"
         );
+    }
+
+    #[test]
+    fn test_allow_unlocked_defaults_to_false() {
+        assert!(!OpenOptions::default().allow_unlocked);
+    }
+
+    #[test]
+    fn test_allow_unlocked_builder_sets_the_field() {
+        assert!(OpenOptions::default().allow_unlocked(true).allow_unlocked);
+    }
+
+    /// `allow_unlocked` must not open a door past a live lock. It applies only
+    /// where the filesystem cannot lock at all.
+    #[test]
+    fn test_allow_unlocked_does_not_bypass_a_live_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allow_unlocked.graph");
+
+        let first = Minigraf::open(&path).unwrap();
+        let opts = OpenOptions::default().allow_unlocked(true);
+        assert!(
+            Minigraf::open_with_options(&path, opts).is_err(),
+            "allow_unlocked must not bypass a lock that is actually held"
+        );
+        drop(first);
     }
 }
 

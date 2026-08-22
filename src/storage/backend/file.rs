@@ -5,113 +5,102 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-/// Advisory file lock to prevent multi-process corruption.
+/// What `FileBackend::open` should do with the result of `File::try_lock`.
 ///
-/// Uses a sidecar `.lock` file with exclusive creation semantics.
-/// The lock is released (file deleted) on drop.
-struct FileLock {
-    path: PathBuf,
+/// Split out from the I/O so the unsupported-filesystem branch is testable
+/// without an exotic filesystem: no CI runner can be relied on to provide a
+/// mount whose locks fail.
+enum LockOutcome {
+    /// We hold the lock.
+    Acquired,
+    /// Another open file description holds it. May be in this process.
+    Held,
+    /// The filesystem cannot lock, and the caller did not opt in to running
+    /// without one.
+    Unsupported(std::io::Error),
+    /// The filesystem cannot lock and the caller accepted the risk.
+    ProceedUnlocked,
 }
 
-impl FileLock {
-    /// Attempt to acquire an exclusive lock for the given database path.
-    /// Returns `Err` if another process already holds the lock.
-    ///
-    /// If a stale lock file exists (the holder is a *different* process that is
-    /// no longer running), it is automatically removed and a new lock is
-    /// acquired. This handles the case where the previous process crashed
-    /// without cleaning up.
-    ///
-    /// A lock held by our OWN pid is never treated as stale. It used to be, on
-    /// the theory that it could only be a leaked handle — but the overwhelmingly
-    /// more likely explanation is a handle that is open and in use right now,
-    /// somewhere else in this process. Stealing it produced two live
-    /// `FileBackend`s on one file, each caching its own `header.page_count`,
-    /// each allocating new pages from that stale count and bounds-checking
-    /// `read_page` against it. That is the source of the intermittent
-    /// "Page N out of bounds (total pages: M)" in #304: not an allocation
-    /// off-by-one, but two page tables diverging. It also corrupted the lock
-    /// itself — whichever handle dropped first ran `FileLock::drop` and deleted
-    /// the lock file belonging to the survivor, leaving a live handle unlocked
-    /// and letting other processes in too.
-    fn acquire(db_path: &Path) -> Result<Self> {
-        let lock_path = db_path.with_extension("graph.lock");
-        // create_new fails with AlreadyExists if the lock file is present
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(mut f) => {
-                // Write PID for diagnostics (best-effort)
-                let _ = write!(f, "{}", std::process::id());
-                Ok(FileLock { path: lock_path })
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Check if the holder process is still alive
-                let holder = std::fs::read_to_string(&lock_path).unwrap_or_default();
-                if let Ok(pid) = holder.trim().parse::<u32>() {
-                    let our_pid = std::process::id();
-                    if pid == our_pid {
-                        // A handle in THIS process holds the lock. Say so
-                        // explicitly: the generic "another process" wording sent
-                        // #304 looking for a second process for a long time.
-                        anyhow::bail!(
-                            "Database is already open in this process (lock file: {}, \
-                             holder PID: {} == our own). A second handle on one file \
-                             would give each its own page table and corrupt both — \
-                             reuse the existing handle instead. `Minigraf` is cheap to \
-                             clone and all clones share the same database.",
-                            lock_path.display(),
-                            pid
-                        );
-                    }
-                    if !Self::is_process_alive(pid) {
-                        // Stale lock — the holding process died without cleaning
-                        // up. Remove and retry.
-                        let _ = std::fs::remove_file(&lock_path);
-                        return Self::acquire(db_path);
-                    }
-                }
-                anyhow::bail!(
-                    "Database is locked by another process (lock file: {}, holder PID: {}). \
-                     If no other process is using this database, delete the lock file manually.",
-                    lock_path.display(),
-                    holder.trim()
-                );
-            }
-            Err(e) => {
-                anyhow::bail!(
-                    "Failed to acquire database lock at {}: {}",
-                    lock_path.display(),
-                    e
-                );
-            }
-        }
-    }
-
-    /// Check if a process with the given PID is still running.
-    fn is_process_alive(pid: u32) -> bool {
-        // On Linux/Android, /proc/<pid> exists iff the process is alive.
-        let proc_path = format!("/proc/{}", pid);
-        if std::path::Path::new(&proc_path).exists() {
-            return true;
-        }
-        // On Linux, if /proc exists but /proc/<pid> doesn't, the process is dead.
-        if std::path::Path::new("/proc").exists() {
-            return false;
-        }
-        // On non-procfs systems (macOS, Windows), assume alive (conservative).
-        // Users must manually delete stale lock files on these platforms.
-        true
+/// Decide what a `try_lock` result means.
+///
+/// `allow_unlocked` is consulted ONLY for `TryLockError::Error`, never for
+/// `WouldBlock`. Letting it bypass a live lock would reintroduce the
+/// two-writers-one-file corruption the lock exists to prevent.
+fn classify(result: Result<(), std::fs::TryLockError>, allow_unlocked: bool) -> LockOutcome {
+    match result {
+        Ok(()) => LockOutcome::Acquired,
+        Err(std::fs::TryLockError::WouldBlock) => LockOutcome::Held,
+        Err(std::fs::TryLockError::Error(_)) if allow_unlocked => LockOutcome::ProceedUnlocked,
+        Err(std::fs::TryLockError::Error(e)) => LockOutcome::Unsupported(e),
     }
 }
 
-impl Drop for FileLock {
+/// Canonicalised paths this process currently has open.
+///
+/// Correctness comes from the kernel lock, not this registry -- but this is
+/// no longer *purely* diagnostic. Two things read it: which error message to
+/// print (#304 was misdiagnosed for a long time when the generic "another
+/// process" wording sent the investigation looking for a second process that
+/// did not exist), and whether `open_with` retries a `WouldBlock` at all. A
+/// same-process conflict is unwinnable by waiting, so that decision skips the
+/// retry loop entirely; only this registry can tell the two cases apart. If
+/// `already_open_here` ever wrongly returned `true`, `open_with` would both
+/// report the wrong error *and* skip the retry that would have let it
+/// succeed.
+static OPEN_PATHS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Removes this backend's path from `OPEN_PATHS` when the backend drops.
+struct PathGuard(Option<PathBuf>);
+
+impl Drop for PathGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if let Some(path) = self.0.take()
+            && let Ok(mut open) = OPEN_PATHS.lock()
+        {
+            open.remove(&path);
+        }
     }
 }
+
+/// True if this process already has `path` open.
+///
+/// Not diagnostic-only: besides choosing which error message to print, this
+/// also gates whether `open_with` retries a `WouldBlock` at all (see
+/// `OPEN_PATHS` above).
+fn already_open_here(path: &Path) -> bool {
+    OPEN_PATHS
+        .lock()
+        .map(|open| open.contains(path))
+        .unwrap_or(false)
+}
+
+/// How many times to retry a cross-process `WouldBlock` before concluding
+/// another process genuinely holds the lock.
+///
+/// `Command::spawn` (in this process or any other) forks before exec'ing the
+/// child; until the child reaches `execve` and its close-on-exec descriptors
+/// close, it transiently holds a duplicate of every flock its parent has
+/// open. A concurrent `try_lock()` elsewhere -- another thread in this
+/// process, a sibling process, or bindings that shell out (Python/Node
+/// commonly do) -- can observe `WouldBlock` during that few-microsecond
+/// window even though no other process is really contending for the file.
+/// SQLite has the same class of problem and solves it with `busy_timeout`;
+/// this is our version, bounded so a database that is genuinely locked by
+/// another process still fails -- after paying the full retry budget below,
+/// not instantly -- rather than `open` hanging indefinitely.
+const LOCK_RETRY_ATTEMPTS: u32 = 10;
+
+/// Initial backoff between retries, doubled each attempt up to
+/// `LOCK_RETRY_MAX_DELAY`.
+const LOCK_RETRY_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Backoff cap. With `LOCK_RETRY_ATTEMPTS` retries doubling from
+/// `LOCK_RETRY_INITIAL_DELAY` and capping here, the worst case is
+/// 5+10+20+40+50+50+50+50+50+50 = 375ms of total sleep -- comfortably longer
+/// than a fork-to-`execve` window, comfortably shorter than a human notices.
+const LOCK_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// File-based storage backend for native platforms.
 ///
@@ -127,10 +116,17 @@ impl Drop for FileLock {
 pub struct FileBackend {
     #[allow(dead_code)]
     path: PathBuf,
+    // `_path_guard` must drop before `file`: dropping `file` releases the
+    // kernel lock, and if the registry entry were still present after that,
+    // another thread in this process could win the lock and insert its own
+    // entry between the two drops -- which this guard would then delete,
+    // leaving the registry claiming "not open" while a live handle exists.
+    // Rust drops struct fields in declaration order, so this field must be
+    // declared before `file`.
+    _path_guard: PathGuard,
     file: File,
     header: FileHeader,
     is_new: bool,
-    _lock: FileLock,
 }
 
 impl FileBackend {
@@ -139,14 +135,30 @@ impl FileBackend {
     /// If the file doesn't exist, creates it with an initial header.
     /// If it exists, validates and loads the header.
     ///
-    /// Acquires an advisory file lock (sidecar `.graph.lock` file) to prevent
-    /// multi-process corruption. Returns an error if the database is already
-    /// opened by another process.
+    /// Takes a kernel file lock on the `.graph` file itself, which prevents
+    /// both multi-process corruption and a second handle within this process.
+    /// The kernel releases the lock when the process exits, however it exits,
+    /// so a crashed holder never leaves the database unopenable (#317).
+    ///
+    /// A `WouldBlock` from a possible cross-process conflict is retried with
+    /// bounded backoff (see `LOCK_RETRY_ATTEMPTS`) before being treated as a
+    /// real conflict, to ride out the transient window where a forked but
+    /// not-yet-exec'd subprocess holds a duplicate of someone else's lock.
+    ///
+    /// Production code calls `open_with` directly. This wrapper survives as a
+    /// convenience for the ~40 in-crate test call sites.
+    #[cfg(test)]
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
+        Self::open_with(path, false)
+    }
 
-        // Acquire advisory lock before touching the database file.
-        let lock = FileLock::acquire(&path)?;
+    /// As [`FileBackend::open`], but `allow_unlocked` permits opening on a
+    /// filesystem that cannot lock at all.
+    ///
+    /// `allow_unlocked` does NOT override a lock held by someone else. It
+    /// applies only when the filesystem rejects locking outright.
+    pub fn open_with<P: AsRef<Path>>(path: P, allow_unlocked: bool) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
 
         let mut file = OpenOptions::new()
             .read(true)
@@ -154,6 +166,104 @@ impl FileBackend {
             .create(true)
             .truncate(false)
             .open(&path)?;
+
+        // Canonicalise only after the file exists. Used for the diagnostic
+        // registry; if it fails we fall back to the generic message.
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+
+        let mut lock_result = file.try_lock();
+
+        // Retry a `WouldBlock` with backoff, but ONLY when the conflict might
+        // be with another process. If this process already has the path
+        // open, waiting is pointless: we are the only thing that could ever
+        // release that lock, and we are standing right here not releasing
+        // it, so every retry would just burn the budget on a certain
+        // failure. Skipping this check keeps `test_second_open_in_same_process_is_refused`
+        // fast instead of paying the full retry budget on every same-process
+        // rejection.
+        if matches!(lock_result, Err(std::fs::TryLockError::WouldBlock))
+            && !already_open_here(&canonical)
+        {
+            let mut delay = LOCK_RETRY_INITIAL_DELAY;
+            for _ in 0..LOCK_RETRY_ATTEMPTS {
+                std::thread::sleep(delay);
+                lock_result = file.try_lock();
+                if !matches!(lock_result, Err(std::fs::TryLockError::WouldBlock)) {
+                    break;
+                }
+                delay = (delay * 2).min(LOCK_RETRY_MAX_DELAY);
+            }
+        }
+
+        let path_guard = match classify(lock_result, allow_unlocked) {
+            LockOutcome::Acquired => {
+                if let Ok(mut open) = OPEN_PATHS.lock() {
+                    open.insert(canonical.clone());
+                }
+                PathGuard(Some(canonical))
+            }
+            LockOutcome::Held if already_open_here(&canonical) => {
+                anyhow::bail!(
+                    "Database is already open in this process ({}). A second handle \
+                     on one file would give each its own page table and corrupt both \
+                     — reuse the existing handle instead. `Minigraf` is cheap to clone \
+                     and all clones share the same database.",
+                    path.display()
+                );
+            }
+            LockOutcome::Held => {
+                anyhow::bail!(
+                    "Database is locked by another process ({}). The lock is held on \
+                     the file itself and is released automatically when the holding \
+                     process exits, so there is no lock file to clean up.",
+                    path.display()
+                );
+            }
+            LockOutcome::Unsupported(e) => {
+                anyhow::bail!(
+                    "Failed to lock database at {}: {}. This filesystem does not \
+                     support file locking (common on NFSv3 without lockd, and on some \
+                     FUSE mounts). Set `allow_unlocked` in `OpenOptions` to open \
+                     anyway — that accepts the risk that concurrent writers corrupt \
+                     the file.",
+                    path.display(),
+                    e
+                );
+            }
+            LockOutcome::ProceedUnlocked => {
+                // There is no kernel lock in this arm, so the registry is not
+                // merely diagnostic here: it is the only thing standing
+                // between us and the #304 two-page-tables corruption if a
+                // second handle in this process opens the same unlockable
+                // path.
+                //
+                // Because it is the only guard, the check and the insert must
+                // be ONE atomic operation. Reading through `already_open_here`
+                // and inserting afterwards releases the mutex in between, and
+                // two threads opening the same path would then both observe
+                // "absent", both insert, and both proceed. `HashSet::insert`
+                // returns false when the key was already present, which gives
+                // us test-and-set under a single lock acquisition.
+                //
+                // A poisoned mutex yields `false` here, so it fails CLOSED:
+                // we refuse to open rather than risk admitting a second
+                // handle we cannot account for.
+                let inserted = OPEN_PATHS
+                    .lock()
+                    .map(|mut open| open.insert(canonical.clone()))
+                    .unwrap_or(false);
+                if !inserted {
+                    anyhow::bail!(
+                        "Database is already open in this process ({}). A second handle \
+                         on one file would give each its own page table and corrupt both \
+                         — reuse the existing handle instead. `Minigraf` is cheap to clone \
+                         and all clones share the same database.",
+                        path.display()
+                    );
+                }
+                PathGuard(Some(canonical))
+            }
+        };
 
         // Check file size using the open file handle's metadata.
         // This is more reliable than checking path metadata separately,
@@ -187,7 +297,7 @@ impl FileBackend {
             file,
             header,
             is_new,
-            _lock: lock,
+            _path_guard: path_guard,
         })
     }
 
@@ -307,12 +417,8 @@ mod tests {
     use super::*;
 
     /// #304: a second handle on a file this process already has open must be
-    /// refused, not granted by deleting our own lock file.
-    ///
-    /// Before the fix `acquire` treated `pid == our_pid` as a stale lock, so
-    /// this second open succeeded and the two backends diverged: each caches
-    /// its own `header.page_count`, allocates new pages from it, and
-    /// bounds-checks `read_page` against it.
+    /// refused. `flock` and OFD locks attach to the open file description, not
+    /// the process, so the kernel denies this without any bookkeeping from us.
     #[test]
     fn test_second_open_in_same_process_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -328,20 +434,147 @@ mod tests {
         };
         assert!(
             msg.contains("already open in this process"),
-            "error should name the same-process case, got: {msg}"
+            "error should name the same-process case"
         );
 
-        // The refusal must not have removed the lock the first handle holds.
-        let lock_path = temp_path.with_extension("graph.lock");
-        assert!(
-            lock_path.exists(),
-            "a refused acquire must leave the existing lock in place"
-        );
         drop(first);
+        // Once the only handle is dropped, the kernel releases the lock.
+        FileBackend::open(&temp_path).unwrap();
+    }
+
+    /// The child half of [`test_cross_process_lock_retries_then_fails_within_budget`]:
+    /// opens `db_path`, holds the lock for `MINIGRAF_HOLD_MILLIS`, signalling
+    /// readiness by creating `MINIGRAF_HOLD_READY_MARKER` right after
+    /// acquiring it. A no-op when the marker environment variable is absent
+    /// -- same convention as `tests/wal_test.rs`'s `crash_child_entrypoint`,
+    /// which this mirrors for the same reason: `#[cfg(test)]` items are
+    /// invisible outside this crate, so a real second process is the only
+    /// way to exercise a genuinely external lock holder.
+    #[test]
+    fn hold_lock_entrypoint() {
+        let Ok(db_path) = std::env::var("MINIGRAF_HOLD_DB") else {
+            return;
+        };
+        let ready_marker = std::env::var("MINIGRAF_HOLD_READY_MARKER").expect("ready marker");
+        let millis: u64 = std::env::var("MINIGRAF_HOLD_MILLIS")
+            .expect("hold millis")
+            .parse()
+            .expect("hold millis is a number");
+
+        let backend = FileBackend::open(&db_path).expect("child holds lock");
+        std::fs::write(&ready_marker, "").expect("write ready marker");
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+        drop(backend);
+        // Falling off the end of the test runs Drop normally (unlike the
+        // WAL crash tests, this one is not simulating a crash -- it is
+        // simulating an ordinary second process that is simply still open),
+        // which releases the kernel lock exactly as the retrying parent
+        // needs to see happen once its budget is spent... except the parent
+        // stops retrying before that, by design: see the driver test.
+    }
+
+    /// A genuinely cross-process lock must still refuse `open` -- with the
+    /// cross-process wording, not the same-process one -- and must do so
+    /// within the bounded retry budget rather than hang.
+    ///
+    /// This is the production-code counterpart to `LOCK_RETRY_ATTEMPTS`
+    /// and `LOCK_RETRY_MAX_DELAY`: nothing else on this branch spawns a
+    /// second process to hold the lock while another tries to open it, so
+    /// nothing else exercises either the cross-process error wording or the
+    /// bound on retry duration. Point (c) below matters beyond timing: if
+    /// `already_open_here` ever wrongly returned `true` for a path this
+    /// process does not actually have open, this is the only test that
+    /// would catch it -- everything else in this module opens and closes
+    /// within a single process.
+    #[test]
+    fn test_cross_process_lock_retries_then_fails_within_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test_cross_process_hold.graph");
+        let ready_marker = {
+            let mut p = db_path.clone().into_os_string();
+            p.push(".ready");
+            PathBuf::from(p)
+        };
+        let _ = std::fs::remove_file(&ready_marker);
+
+        let exe = std::env::current_exe().expect("test binary path");
+        let mut holder = std::process::Command::new(&exe)
+            .args([
+                "storage::backend::file::tests::hold_lock_entrypoint",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("MINIGRAF_HOLD_DB", &db_path)
+            .env("MINIGRAF_HOLD_READY_MARKER", &ready_marker)
+            // Comfortably longer than LOCK_RETRY_ATTEMPTS' ~375ms budget, so
+            // this process's retries must exhaust while the lock is still
+            // genuinely held.
+            //
+            // 3s rather than something nearer the budget: at 600ms only
+            // ~215ms of slack separated the two, and if this process were
+            // descheduled for longer than that anywhere across its ten retry
+            // iterations, the child would release mid-loop, this open would
+            // SUCCEED, and the test would fail claiming a cross-process lock
+            // was not refused. CI runs this on three platforms with 34 test
+            // binaries in flight, so that margin was not safe.
+            .env("MINIGRAF_HOLD_MILLIS", "3000")
+            .spawn()
+            .expect("spawn lock holder");
+
+        // Wait for the child to actually hold the lock before racing it --
+        // otherwise this test would be racing its own setup, not the retry.
+        let setup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready_marker.exists() {
+            assert!(
+                std::time::Instant::now() < setup_deadline,
+                "lock-holding child never signalled readiness"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let start = std::time::Instant::now();
+        let result = FileBackend::open(&db_path);
+        let elapsed = start.elapsed();
+
+        // (a) a real cross-process lock is still refused.
+        let msg = match result {
+            Ok(_) => panic!("a genuinely cross-process lock must be refused"),
+            Err(e) => e.to_string(),
+        };
+
+        // (b) the retry budget is bounded: this must fail in roughly the
+        // ~375ms budget, NOT hang for the holder's full 3s hold. The 2s bound
+        // is far below the hold, so a regression that waited for the holder
+        // instead of giving up would fail here.
         assert!(
-            !lock_path.exists(),
-            "dropping the only handle should release the lock"
+            elapsed < std::time::Duration::from_secs(2),
+            "retry budget must be bounded, not hang"
         );
+
+        // (c) the error names the cross-process case, not the same-process
+        // one -- this process never had the path open.
+        assert!(
+            msg.contains("locked by another process"),
+            "must report the cross-process wording"
+        );
+        assert!(
+            !msg.contains("already open in this process"),
+            "must not report the same-process wording for a real second process"
+        );
+
+        // Once the holder exits, the lock -- and the holder's own registry
+        // entry, which only the holder's process could ever remove -- are
+        // both gone, so a fresh open succeeds without retrying at all.
+        //
+        // Kill rather than waiting out the remaining hold: it keeps the test
+        // fast, and release-on-SIGKILL is the property that actually matters
+        // here. A holder that exits cleanly is the easy case; #317 was about
+        // one that never got to run any cleanup at all.
+        holder.kill().expect("kill lock holder");
+        holder.wait().expect("reap lock holder");
+        FileBackend::open(&db_path).expect("open must succeed once the holder exits");
+
+        let _ = std::fs::remove_file(&ready_marker);
     }
 
     /// The refusal must not regress the sequential open/drop/reopen cycle that
@@ -358,36 +591,49 @@ mod tests {
         assert!(FileBackend::open(&temp_path).is_ok());
     }
 
-    /// A lock left behind by a *different*, dead process is still stale and
-    /// must still be self-healed — that behaviour is what the `pid == our_pid`
-    /// branch was overreaching from, and it must survive the fix.
-    ///
-    /// procfs-only: without `/proc`, `is_process_alive` cannot distinguish a
-    /// dead PID from a live one and deliberately errs towards "alive" (see its
-    /// own comment), so reclamation is a Linux/Android guarantee only. On other
-    /// platforms a stale lock must still be removed by hand.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    /// A leftover sidecar from v1.2.x must not block an open. We neither read
+    /// nor delete it: a still-running old process may rely on it.
     #[test]
-    fn test_dead_other_process_lock_is_still_reclaimed() {
+    fn test_leftover_sidecar_is_ignored_and_preserved() {
         let dir = tempfile::tempdir().unwrap();
-        let temp_path = dir.path().join("test_minigraf_stale.graph");
-        let lock_path = temp_path.with_extension("graph.lock");
+        let temp_path = dir.path().join("test_minigraf_leftover.graph");
+        let legacy = temp_path.with_extension("graph.lock");
+        std::fs::write(&legacy, "1").unwrap();
 
-        // PID 1 is always alive; instead spawn a real child and let it exit so
-        // we have a genuinely dead PID that is not us.
-        let child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        let mut child = child;
-        child.wait().unwrap();
+        let backend = FileBackend::open(&temp_path).unwrap();
+        drop(backend);
 
-        std::fs::write(&lock_path, dead_pid.to_string()).unwrap();
-
-        let backend = FileBackend::open(&temp_path);
         assert!(
-            backend.is_ok(),
-            "a dead other process's lock must still be reclaimed: {:?}",
-            backend.err()
+            legacy.exists(),
+            "a leftover sidecar must be left alone, not deleted"
         );
+    }
+
+    /// The path registry must not leak entries: a refused open must leave the
+    /// set exactly as it found it, so a later refusal still reports the
+    /// same-process case rather than degrading to the generic
+    /// "locked by another process" wording.
+    #[test]
+    fn test_refused_open_does_not_corrupt_path_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp_path = dir.path().join("test_minigraf_registry.graph");
+
+        let first = FileBackend::open(&temp_path).unwrap();
+        assert!(FileBackend::open(&temp_path).is_err()); // first refusal
+
+        // A refused open must not have removed first's registry entry: a
+        // second refusal must still see it and report the same-process case.
+        let msg = match FileBackend::open(&temp_path) {
+            Ok(_) => panic!("must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("already open in this process"),
+            "registry entry must survive a refused open"
+        );
+
+        drop(first);
+        FileBackend::open(&temp_path).unwrap();
     }
 
     #[test]
@@ -473,5 +719,43 @@ mod tests {
 
         backend.write_page(2, &vec![0u8; PAGE_SIZE]).unwrap();
         assert_eq!(backend.page_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_classify_ok_is_acquired() {
+        assert!(matches!(classify(Ok(()), false), LockOutcome::Acquired));
+        assert!(matches!(classify(Ok(()), true), LockOutcome::Acquired));
+    }
+
+    #[test]
+    fn test_classify_would_block_is_held_regardless_of_allow_unlocked() {
+        // allow_unlocked must NOT override a live lock: doing so reintroduces
+        // exactly the cross-process corruption the lock exists to prevent.
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::WouldBlock), false),
+            LockOutcome::Held
+        ));
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::WouldBlock), true),
+            LockOutcome::Held
+        ));
+    }
+
+    #[test]
+    fn test_classify_unsupported_fails_closed_by_default() {
+        let e = std::io::Error::from_raw_os_error(95); // ENOTSUP
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::Error(e)), false),
+            LockOutcome::Unsupported(_)
+        ));
+    }
+
+    #[test]
+    fn test_classify_unsupported_proceeds_when_allowed() {
+        let e = std::io::Error::from_raw_os_error(37); // ENOLCK
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::Error(e)), true),
+            LockOutcome::ProceedUnlocked
+        ));
     }
 }

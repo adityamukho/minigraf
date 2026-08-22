@@ -7,6 +7,7 @@ resolver = "2"
 name = "minigraf"
 version = "1.2.3"
 edition = "2024"
+rust-version = "1.89"
 description = "Zero-config, single-file, embedded graph database with bi-temporal Datalog queries"
 license = "MIT OR Apache-2.0"
 authors = ["Aditya Mukhopadhyay"]

@@ -1707,6 +1707,7 @@ When evaluating features, ask:
 - ✅ v1.2.1 — Magic sets `fb` adornment fix: sentinel entity + 2-arg guard preserves keyword type through value-position binding (#297, #298)
 - ✅ v1.2.3 — Core unchanged; cut to carry `minigraf-node`'s new `close()` (project-minigraf/minigraf-node#1), needed because v1.2.2's handle exclusion left GC'd hosts with no way to release a handle
 - ✅ v1.2.2 — `FileLock::acquire` no longer treats a lock held by our own PID as stale, which had allowed two handles on one file per process with divergent page tables — the source of the intermittent `Page N out of bounds` (#304); ordering predicates compare strings lexicographically (#312)
+- 🚧 Unreleased — Kernel file locking replaces the PID sidecar (#317, #304). A PID is not a liveness token: it is not unique across PID namespaces and is recycled within one, so a container killed with SIGKILL left `.graph.lock` holding `1` and the replacement container — also PID 1 — read its own PID back and refused to open, permanently. `std::fs::File::try_lock` moves liveness to the kernel, which releases on process death however it occurs; because `flock`/OFD locks attach to the open file description, a second open within one process is refused too, so v1.2.2's fix for #304 is preserved without any PID bookkeeping. The sidecar is gone. MSRV moves 1.85 → 1.89. Nightly NFS and Docker lock suites deferred to #324
 
 **Transferred to other repos**:
 - Developer tools: `minigraf-inspector` (#184), `minigraf-visualizer` (#186); #185 (query profiler) deferred to 2.0
@@ -1729,4 +1730,4 @@ See [GitHub Issues](https://github.com/project-minigraf/minigraf/issues) for spe
 
 ---
 
-**Last Updated**: August 2026 — v1.2.3 released (core unchanged; carries the minigraf-node `close()` fix). Next up is v1.3.0 (performance + structured errors: #274, #275, #248, #250, #277)
+**Last Updated**: August 2026 — v1.2.3 released (core unchanged; carries the minigraf-node `close()` fix). Kernel file locking (#317, #304) is merged but unreleased; its release version is deliberately undecided, see the CHANGELOG's breaking-changes section. Next up is v1.3.0 (performance + structured errors: #274, #275, #248, #250, #277)

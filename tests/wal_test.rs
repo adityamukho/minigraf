@@ -2,7 +2,7 @@
 //!
 //! These tests exercise the file-backed `Minigraf` API end-to-end, verifying:
 //! - Basic persistence (write → drop → reopen)
-//! - WAL crash recovery (simulated crash via `mem::forget`)
+//! - WAL crash recovery (real crash via a child process that aborts)
 //! - Duplicate-free recovery after post-checkpoint crash
 //! - Partial WAL entry discarding
 //! - Manual checkpoint behaviour
@@ -14,6 +14,126 @@
 
 use minigraf::QueryResult;
 use minigraf::db::{Minigraf, OpenOptions};
+
+/// Serializes `Command::spawn` calls within this test binary.
+///
+/// `Command::spawn` forks the whole (multi-threaded) test process before
+/// exec'ing the child. Until that child reaches `execve` and its
+/// close-on-exec descriptors are closed, it transiently holds a duplicate of
+/// every flock any other thread's test currently has open on a `.graph`
+/// file — which can make an unrelated, concurrent `try_lock()` elsewhere in
+/// this binary observe `WouldBlock` for a few microseconds and fail with
+/// "Database is locked by another process", even though no other process
+/// was ever really involved. Capping this binary to one fork in flight at a
+/// time keeps that window rare enough not to flake the suite.
+///
+/// This is now belt-and-braces: `FileBackend::open_with` (src/storage/backend/file.rs)
+/// retries a cross-process `WouldBlock` with bounded backoff, which is the
+/// real fix for the false-negative window described above. This mutex is
+/// cheap insurance on top of that, not load-bearing on its own.
+static CRASH_CHILD_SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether the crashing child commits `statements` as one explicit
+/// transaction or as separate auto-committed writes.
+#[derive(Clone, Copy)]
+enum CrashTx {
+    /// Each statement is its own auto-committed `db.execute()` call — the
+    /// implicit-transaction path.
+    Implicit,
+    /// All statements run inside one `begin_write()` / `commit()` — pins
+    /// that `WriteTransaction::commit()` itself writes to the WAL before a
+    /// crash, and that multiple pending facts survive (or are lost) as one
+    /// atomic unit rather than as independent writes.
+    Explicit,
+}
+
+/// Runs a child process that opens `db_path`, applies `statements` (per
+/// `tx`), then dies by `abort()` without running any `Drop`.
+///
+/// This is a real crash, not a simulated one: the child's file descriptors are
+/// closed by the kernel, which releases the file lock exactly as it would for a
+/// SIGKILLed container. Forgetting the handle in-process cannot model this — it
+/// leaks the `File`, so the lock stays held for the life of the test process.
+fn run_crashing_child(
+    db_path: &std::path::Path,
+    wal_checkpoint_threshold: usize,
+    statements: &[&str],
+    tx: CrashTx,
+) {
+    let exe = std::env::current_exe().expect("test binary path");
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(["crash_child_entrypoint", "--exact", "--nocapture"])
+        .env("MINIGRAF_CRASH_DB", db_path)
+        .env(
+            "MINIGRAF_CRASH_THRESHOLD",
+            wal_checkpoint_threshold.to_string(),
+        )
+        .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"));
+    if matches!(tx, CrashTx::Explicit) {
+        command.env("MINIGRAF_CRASH_TX", "1");
+    }
+
+    let status = {
+        let _guard = CRASH_CHILD_SPAWN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        command.status().expect("spawn crash child")
+    };
+
+    // On Unix `abort()` raises SIGABRT and `code()` is None. On Windows it
+    // terminates with a nonzero exit code instead. The property that matters
+    // on both is that the child did not exit cleanly.
+    assert!(
+        status.code().unwrap_or(1) != 0,
+        "crash child must not exit cleanly"
+    );
+}
+
+/// The child half of [`run_crashing_child`]. A no-op in ordinary test runs.
+///
+/// This is a `#[test]` purely so the harness will dispatch to it by name; when
+/// the marker environment variable is absent it returns immediately.
+#[test]
+fn crash_child_entrypoint() {
+    let Ok(db_path) = std::env::var("MINIGRAF_CRASH_DB") else {
+        return;
+    };
+    let threshold: usize = std::env::var("MINIGRAF_CRASH_THRESHOLD")
+        .expect("threshold")
+        .parse()
+        .expect("threshold is a number");
+    let stmts = std::env::var("MINIGRAF_CRASH_STMTS").expect("statements");
+    let explicit_tx = std::env::var("MINIGRAF_CRASH_TX").is_ok();
+
+    let db = Minigraf::open_with_options(
+        &db_path,
+        OpenOptions {
+            wal_checkpoint_threshold: threshold,
+            ..Default::default()
+        },
+    )
+    .expect("child opens db");
+
+    if explicit_tx {
+        // All statements commit together as one explicit transaction, so a
+        // crash right after `commit()` must recover either all of them or
+        // none of them -- not a subset.
+        let mut tx = db.begin_write().expect("child begin_write");
+        for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+            tx.execute(stmt).expect("child tx statement");
+        }
+        tx.commit().expect("child commit");
+    } else {
+        for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+            db.execute(stmt).expect("child statement");
+        }
+    }
+
+    // Die without running Drop, so no checkpoint happens and the WAL is left
+    // for the next open to replay.
+    std::process::abort();
+}
 
 /// File format page size (4 KiB) — matches the internal `PAGE_SIZE` constant.
 const PAGE_SIZE: usize = 4096;
@@ -60,7 +180,7 @@ fn test_file_backed_basic_persistence() {
 // ── 2. WAL recovery after simulated crash ─────────────────────────────────────
 
 /// Write a fact with a very high checkpoint threshold so the checkpoint never fires,
-/// then `mem::forget` the DB to simulate a crash (skipping the Drop checkpoint).
+/// then crash a child process holding the DB (skipping the Drop checkpoint).
 /// Verify the WAL exists, then reopen and confirm the fact was recovered.
 #[test]
 fn test_wal_recovery_after_simulated_crash() {
@@ -69,26 +189,12 @@ fn test_wal_recovery_after_simulated_crash() {
     let wal_path = wal_path_for(&db_path);
 
     // "Crash" session: write fact, skip Drop
-    {
-        let db = Minigraf::open_with_options(
-            &db_path,
-            OpenOptions {
-                wal_checkpoint_threshold: usize::MAX,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        db.execute(r#"(transact [[:alice :name "Alice"]])"#)
-            .unwrap();
-
-        // Simulate a crash: drop Inner without running Drop logic.
-        // mem::forget on the Arc-backed Minigraf drops the Arc but leaves
-        // the Inner alive as long as the clone lives — however, since this
-        // is the only handle, forgetting it leaks the Arc permanently and
-        // the Drop impl never runs.
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        1_000_000,
+        &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
+    );
 
     // WAL must still exist (no checkpoint happened)
     assert!(wal_path.exists(), "WAL must exist after simulated crash");
@@ -118,20 +224,12 @@ fn test_no_duplicate_facts_after_post_checkpoint_crash() {
     let wal_path = wal_path_for(&db_path);
 
     // Session 1: write fact and crash (skip Drop)
-    {
-        let db = Minigraf::open_with_options(
-            &db_path,
-            OpenOptions {
-                wal_checkpoint_threshold: usize::MAX,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        db.execute(r#"(transact [[:alice :name "Alice"]])"#)
-            .unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        usize::MAX,
+        &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
+    );
 
     // Back up the WAL before the next open checkpoints it away
     let wal_backup = std::fs::read(&wal_path).unwrap();
@@ -178,20 +276,12 @@ fn test_partial_wal_entry_discarded_earlier_entries_intact() {
     let wal_path = wal_path_for(&db_path);
 
     // Session 1: write 1 fact and crash
-    {
-        let db = Minigraf::open_with_options(
-            &db_path,
-            OpenOptions {
-                wal_checkpoint_threshold: usize::MAX,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        db.execute(r#"(transact [[:alice :name "Alice"]])"#)
-            .unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        usize::MAX,
+        &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
+    );
 
     // Append garbage bytes after the valid WAL entry (simulate partial second write)
     {
@@ -261,9 +351,24 @@ fn test_manual_checkpoint_deletes_wal() {
     );
     assert_eq!(n, 1, "Alice must still be visible after checkpoint");
 
+    // Nothing is pending after the checkpoint above (no WAL to lose), so a
+    // real crash and a normal close are observationally identical here.
+    // Dropping `db` releases the kernel file lock exactly as process death
+    // would — no subprocess is needed just to prove that.
+    drop(db);
+
     // Main file header must reflect the checkpoint.
     // Reads the raw bytes: version is at offset 4..8 (u32 LE),
     // last_checkpointed_tx_count is at offset 24..32 (u64 LE).
+    //
+    // This read has to come AFTER the drop above. Windows file locks are
+    // mandatory rather than advisory, and they exclude every other handle --
+    // including another handle in this same process. Reading the header
+    // through a second `File` while `db` still holds the lock fails on
+    // Windows with os error 33, "another process has locked a portion of the
+    // file", even though the "other process" is us. On Unix the lock is
+    // advisory and the read would succeed either way, which is exactly why
+    // this only ever failed on one leg of the CI matrix.
     {
         use std::io::Read;
         let mut f = std::fs::File::open(&db_path).unwrap();
@@ -275,10 +380,6 @@ fn test_manual_checkpoint_deletes_wal() {
             "last_checkpointed_tx_count must be set after checkpoint"
         );
     }
-
-    // Simulate crash: skip Drop (checkpoint already happened, no WAL to write)
-    std::mem::forget(db);
-    simulate_crashed_holder(&db_path);
 
     // Reopen: must recover the fact from the main file alone (no WAL needed)
     let db2 = Minigraf::open(&db_path).unwrap();
@@ -294,9 +395,9 @@ fn test_manual_checkpoint_deletes_wal() {
 
 // ── 6. Auto-checkpoint fires at threshold ─────────────────────────────────────
 
-/// Set threshold=2, write 2 facts (triggering auto-checkpoint on the 2nd write).
-/// Crash (mem::forget), then reopen. The facts must be in the main file — no WAL
-/// needed for recovery.
+/// Set threshold=2, write 2 facts (triggering auto-checkpoint on the 2nd write),
+/// close, then reopen. The facts must be in the main file — no WAL needed for
+/// recovery.
 #[test]
 fn test_auto_checkpoint_fires_at_threshold() {
     let dir = tempfile::tempdir().unwrap();
@@ -321,9 +422,10 @@ fn test_auto_checkpoint_fires_at_threshold() {
             !wal_path.exists(),
             "WAL must be deleted after auto-checkpoint at threshold=2"
         );
-        // Crash: skip Drop checkpoint (but checkpoint already happened)
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
+        // Crash: skip Drop checkpoint. Nothing is pending though — the
+        // auto-checkpoint above already flushed the WAL, so a normal drop
+        // here releases the kernel lock exactly as a real crash would, with
+        // nothing left to lose.
     }
 
     // No WAL after crash
@@ -346,34 +448,30 @@ fn test_auto_checkpoint_fires_at_threshold() {
 
 // ── 7. Explicit tx: all-or-nothing commit ─────────────────────────────────────
 
-/// begin_write → 2 transacts → commit → crash (mem::forget) → reopen.
+/// begin_write → 2 transacts → commit → crash → reopen.
 /// Both facts must be present.
 #[test]
 fn test_explicit_tx_all_or_nothing_commit() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("explicit_commit.graph");
 
-    // Session 1: explicit commit then crash
-    {
-        let db = Minigraf::open_with_options(
-            &db_path,
-            OpenOptions {
-                wal_checkpoint_threshold: usize::MAX,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let mut tx = db.begin_write().unwrap();
-        tx.execute(r#"(transact [[:alice :name "Alice"]])"#)
-            .unwrap();
-        tx.execute(r#"(transact [[:bob :name "Bob"]])"#).unwrap();
-        tx.commit().unwrap();
-
-        // Crash before Drop checkpoint
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    // Session 1: one explicit transaction with both facts, committed
+    // together, then crash before checkpoint. `CrashTx::Explicit` makes the
+    // child wrap both statements in a single `begin_write()` / `commit()`,
+    // so this pins two distinct things: that `WriteTransaction::commit()`
+    // itself writes to the WAL (not just the implicit per-statement
+    // `db.execute()` path, which `test_implicit_tx_execute_survives_replay`
+    // already covers), and that the commit is atomic as a unit — recovery
+    // below must see both facts together, never just one of them.
+    run_crashing_child(
+        &db_path,
+        usize::MAX,
+        &[
+            r#"(transact [[:alice :name "Alice"]])"#,
+            r#"(transact [[:bob :name "Bob"]])"#,
+        ],
+        CrashTx::Explicit,
+    );
 
     // Recovery session
     let db2 = Minigraf::open(&db_path).unwrap();
@@ -497,7 +595,7 @@ fn test_concurrent_reads_while_writer_holds_lock() {
 /// Test strategy:
 /// 1. Open a file-backed database with a very high checkpoint threshold.
 /// 2. Call `execute("(transact ...)")` — the implicit-transaction path.
-/// 3. `mem::forget` the database to simulate a crash (no Drop checkpoint).
+/// 3. Crash a child process holding the database (no Drop checkpoint).
 /// 4. Reopen the database (triggers WAL replay).
 /// 5. Assert the fact is present — proving the WAL was written during step 2.
 #[test]
@@ -507,23 +605,12 @@ fn test_implicit_tx_execute_survives_replay() {
     let wal_path = wal_path_for(&db_path);
 
     // Session 1: write via implicit execute() then crash (skip Drop)
-    {
-        let db = Minigraf::open_with_options(
-            &db_path,
-            OpenOptions {
-                wal_checkpoint_threshold: usize::MAX,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        db.execute(r#"(transact [[:alice :name "Alice"]])"#)
-            .unwrap();
-
-        // Simulate crash: skip Drop (and its checkpoint).
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        usize::MAX,
+        &[r#"(transact [[:alice :name "Alice"]])"#],
+        CrashTx::Implicit,
+    );
 
     // WAL must exist — no checkpoint fired.
     assert!(wal_path.exists(), "WAL must exist after simulated crash");
@@ -553,12 +640,12 @@ fn write_wal_bytes(db_path: &std::path::Path, bytes: &[u8]) {
 fn setup_db_with_one_fact() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    {
-        let db = minigraf::db::Minigraf::open(&db_path).unwrap();
-        db.execute(r#"(transact [[:e1 :name "Alice"]])"#).unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[r#"(transact [[:e1 :name "Alice"]])"#],
+        CrashTx::Implicit,
+    );
     let wal_bytes = read_wal_bytes(&db_path);
     (dir, db_path, wal_bytes)
 }
@@ -607,13 +694,15 @@ fn wal_recover_truncated_payload() {
 fn wal_recover_bad_checksum_second_entry() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    {
-        let db = minigraf::db::Minigraf::open(&db_path).unwrap();
-        db.execute(r#"(transact [[:e1 :name "Alice"]])"#).unwrap();
-        db.execute(r#"(transact [[:e2 :name "Bob"]])"#).unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[
+            r#"(transact [[:e1 :name "Alice"]])"#,
+            r#"(transact [[:e2 :name "Bob"]])"#,
+        ],
+        CrashTx::Implicit,
+    );
     let mut wal_bytes = read_wal_bytes(&db_path);
     assert!(wal_bytes.len() > 36, "WAL too short to corrupt");
     let n = wal_bytes.len();
@@ -633,14 +722,16 @@ fn wal_recover_bad_checksum_second_entry() {
 fn wal_recover_committed_tx_crash_before_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    {
-        let db = minigraf::db::Minigraf::open(&db_path).unwrap();
-        let mut tx = db.begin_write().unwrap();
-        tx.execute(r#"(transact [[:e1 :name "Charlie"]])"#).unwrap();
-        tx.commit().unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    // `CrashTx::Explicit` makes the child commit through
+    // `begin_write()`/`commit()`, pinning that an explicitly committed
+    // transaction (not just the implicit `db.execute()` path) survives a
+    // crash before checkpoint.
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[r#"(transact [[:e1 :name "Charlie"]])"#],
+        CrashTx::Explicit,
+    );
     let names = query_names(&db_path);
     assert_eq!(
         names.len(),
@@ -662,8 +753,9 @@ fn wal_recover_rollback_crash() {
         let mut tx = db.begin_write().unwrap();
         tx.execute(r#"(transact [[:e1 :name "Dave"]])"#).unwrap();
         tx.rollback();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
+        // Rollback discards pending facts before they are ever flushed to
+        // the WAL, so there is nothing here for a crash to lose. A normal
+        // drop releases the kernel lock exactly as process death would.
     }
     let names = query_names(&db_path);
     assert_eq!(
@@ -677,13 +769,15 @@ fn wal_recover_rollback_crash() {
 fn wal_recover_multiple_committed_corrupt_tail() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    {
-        let db = minigraf::db::Minigraf::open(&db_path).unwrap();
-        db.execute(r#"(transact [[:e1 :name "Eve"]])"#).unwrap();
-        db.execute(r#"(transact [[:e2 :name "Frank"]])"#).unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[
+            r#"(transact [[:e1 :name "Eve"]])"#,
+            r#"(transact [[:e2 :name "Frank"]])"#,
+        ],
+        CrashTx::Implicit,
+    );
     let mut wal_bytes = read_wal_bytes(&db_path);
     wal_bytes.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00]);
     write_wal_bytes(&db_path, &wal_bytes);
@@ -699,12 +793,12 @@ fn wal_recover_multiple_committed_corrupt_tail() {
 fn wal_corrupt_tail_never_applied() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
-    {
-        let db = minigraf::db::Minigraf::open(&db_path).unwrap();
-        db.execute(r#"(transact [[:e1 :name "Grace"]])"#).unwrap();
-        std::mem::forget(db);
-        simulate_crashed_holder(&db_path);
-    }
+    run_crashing_child(
+        &db_path,
+        1000,
+        &[r#"(transact [[:e1 :name "Grace"]])"#],
+        CrashTx::Implicit,
+    );
     let mut wal_bytes = read_wal_bytes(&db_path);
     let mut fake_entry: Vec<u8> = Vec::new();
     fake_entry.extend_from_slice(&0u32.to_le_bytes());
@@ -819,24 +913,4 @@ fn test_v2_file_opens_and_upgrades_to_v3_on_checkpoint() {
         last_checkpointed_tx_count > 0,
         "last_checkpointed_tx_count must be set after checkpoint on v2→v6 upgrade"
     );
-}
-
-/// Complete a `mem::forget`-based crash simulation.
-///
-/// `mem::forget` skips `FileLock::drop`, so the sidecar `.graph.lock` is left
-/// behind holding OUR pid. A lock held by a live pid means a handle that is
-/// open right now, so reopening is correctly refused (#304) -- but that is not
-/// what a crash leaves behind. A crashed process leaves the lock holding its
-/// own, now-dead pid.
-///
-/// Removing the lock models the state the next open actually finds after a
-/// crashed holder is cleaned up, and does so on every platform. Writing a dead
-/// pid instead would only work on procfs targets: `is_process_alive` cannot
-/// tell dead from live without `/proc` and deliberately errs towards "alive",
-/// so a dead pid still blocks on macOS and Windows. Reclamation of a dead
-/// holder's lock is covered directly by
-/// `storage::backend::file::tests::test_dead_other_process_lock_is_still_reclaimed`;
-/// these tests are about WAL replay.
-fn simulate_crashed_holder(db_path: &std::path::Path) {
-    let _ = std::fs::remove_file(db_path.with_extension("graph.lock"));
 }
