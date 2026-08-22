@@ -1172,8 +1172,10 @@ Any repository pinning a toolchain below 1.89 needs its pin raised in the cascad
 
 - [ ] **Step 3: Run the full suite once more**
 
-Run: `cargo test --no-fail-fast && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
-Expected: PASS on all three. `rust-clippy.yml` and `rustfmt.yml` both gate CI.
+Run: `cargo test --no-fail-fast && cargo clippy --all-features -- -D warnings && cargo fmt --check`
+Expected: PASS on all three.
+
+Use `--all-features`, NOT `--all-targets`. `--all-features` is exactly what `.github/workflows/rust-clippy.yml` runs, and `main` passes it cleanly. `--all-targets` additionally lints the test binaries, which carry substantial pre-existing lint debt on `main` (approximate `PI` constant, indexing-may-panic, and several hundred more across seven test binaries) that CI has never gated on. Gating this branch on that debt would block it for reasons unrelated to the change.
 
 - [ ] **Step 4: Check the binary size gate**
 
