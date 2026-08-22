@@ -66,93 +66,21 @@ fn spawn_in_namespace(
     helper: &Path,
     db: &Path,
     mode: &str,
+    hold_millis: u64,
 ) -> std::process::Child {
-    use std::os::unix::process::CommandExt;
-
     Command::new(&prefix[0])
         .args(&prefix[1..])
         .arg(helper)
         .arg(db)
         .arg(mode)
-        // Give the child its own process group, so the whole tree beneath it
-        // -- privilege wrapper, `unshare`, and the process that becomes PID 1
-        // in the new namespace -- can be killed as a unit. See `kill_holder`.
-        .process_group(0)
+        // How long the holder keeps the lock before aborting itself. See the
+        // module comment on `examples/pid_ns_helper.rs` for why the holder
+        // ends its own life rather than being killed from here.
+        .env("MINIGRAF_NS_HOLD_MILLIS", hold_millis.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn in namespace")
-}
-
-/// Kills a namespaced holder and everything beneath it, then reaps it.
-///
-/// Killing the spawned process alone is not enough when a privilege wrapper
-/// sits between us and `unshare`: SIGKILL runs no handler, so the wrapper
-/// forwards nothing and the namespaced holder survives, still holding the
-/// flock. That produces a spectacularly misleading failure — the #317
-/// regression test fails identically whether or not the bug is present,
-/// because the lock genuinely is still held.
-///
-/// The child leads its own process group (see `spawn_in_namespace`), so
-/// signalling the negated PID reaches every descendant. When the prefix
-/// escalates privilege, the descendants are root-owned and the signal has to
-/// be sent with the same escalation, or it fails with EPERM.
-fn kill_holder(prefix: &[String], child: &mut KillOnDrop) {
-    let pgid = child.id().to_string();
-    let target = format!("-{pgid}");
-
-    let mut kill = if prefix[0] == "sudo" {
-        let mut c = Command::new("sudo");
-        c.arg("-n").arg("kill");
-        c
-    } else {
-        Command::new("kill")
-    };
-
-    let _ = kill
-        .arg("-9")
-        .arg(&target)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    // Belt and braces: also signal the direct child, in case the process
-    // group could not be signalled at all.
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// Kills and reaps the wrapped child on drop.
-///
-/// `std::process::Child` does not do this itself -- dropping a `Child`
-/// leaves the process running if it still is. Both tests below hold a
-/// "container A" child across an `assert!` before they get around to an
-/// explicit `kill`/`wait`; if that assert (or anything else) panics first,
-/// the panic unwinds straight past the explicit cleanup and orphans
-/// container A: PID 1 in its own namespace, part-way through a 300-second
-/// sleep, still holding the flock. `Deref`/`DerefMut` to `Child` let call
-/// sites keep using `.kill()`/`.wait()` exactly as before; this only adds a
-/// safety net for the unwind path.
-struct KillOnDrop(std::process::Child);
-
-impl std::ops::Deref for KillOnDrop {
-    type Target = std::process::Child;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for KillOnDrop {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 /// Path to the compiled helper binary (see `examples/pid_ns_helper.rs`).
@@ -205,32 +133,33 @@ fn test_lock_survives_holder_death_in_another_pid_namespace() {
     // right after this, on a namespace flake or a slow runner) still kills
     // and reaps it instead of orphaning a namespaced holder sitting on the
     // flock for its 300-second sleep.
-    let mut a = KillOnDrop(spawn_in_namespace(&prefix, &helper, &db, "hold"));
+    // Container A opens the database and then dies WITHOUT running Drop --
+    // no checkpoint, no library-side lock release, exactly what a SIGKILLed
+    // container leaves behind. The holder aborts itself rather than being
+    // killed from here; see the module comment on examples/pid_ns_helper.rs
+    // for why killing across the privilege boundary cannot be made reliable.
+    let a = spawn_in_namespace(&prefix, &helper, &db, "hold", 0)
+        .wait_with_output()
+        .expect("container A ran");
 
-    // Wait for it to report that it holds the lock.
-    let mut held = false;
-    for _ in 0..80 {
-        if db.exists() && std::fs::metadata(&db).map(|m| m.len() > 0).unwrap_or(false) {
-            held = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(held, "container A never opened the database");
+    // A must actually have taken the lock before dying, or this proves
+    // nothing. It printed OPEN_OK before aborting, and it did not exit
+    // cleanly.
+    let a_out = String::from_utf8_lossy(&a.stdout);
+    assert!(
+        a_out.contains("OPEN_OK"),
+        "container A never opened the database.\n\
+         prefix used: {prefix:?}\n\
+         container A stdout: {a_out}\n\
+         container A stderr: {}",
+        String::from_utf8_lossy(&a.stderr)
+    );
+    assert!(
+        a.status.code().unwrap_or(1) != 0,
+        "container A must die by abort, not exit cleanly"
+    );
 
-    // Container A is OOMKilled. No Drop runs.
-    //
-    // `kill()` reaches only the process we spawned. Where `unshare` is the
-    // direct child that is enough, because `--kill-child` sets
-    // PR_SET_PDEATHSIG on the process that becomes PID 1. Where a privilege
-    // wrapper sits in between, killing the wrapper cannot propagate — a
-    // SIGKILLed process runs no handler and forwards nothing — so the
-    // namespaced holder would survive and keep the lock. Kill the whole
-    // process group instead, which reaches every descendant regardless.
-    kill_holder(&prefix, &mut a);
-
-    // Container B: a different container, also PID 1 in its own namespace.
-    let b = spawn_in_namespace(&prefix, &helper, &db, "open")
+    let b = spawn_in_namespace(&prefix, &helper, &db, "open", 0)
         .wait_with_output()
         .expect("container B ran");
 
@@ -258,9 +187,12 @@ fn test_two_live_namespaced_holders_are_still_refused() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("contended.graph");
 
-    // See the comment on `KillOnDrop`: `a` must survive the `.expect` below
     // panicking (B fails to spawn/run) without leaking a namespaced holder.
-    let mut a = KillOnDrop(spawn_in_namespace(&prefix, &helper, &db, "hold"));
+    // A bounded hold, long enough for B to be refused while A is alive, and
+    // short enough that a failure here cannot strand a namespaced process on
+    // the flock for minutes of a shared runner's time. A ends itself; nothing
+    // depends on this process being able to kill it.
+    let a = spawn_in_namespace(&prefix, &helper, &db, "hold", 2000);
     let mut held = false;
     for _ in 0..80 {
         if db.exists() && std::fs::metadata(&db).map(|m| m.len() > 0).unwrap_or(false) {
@@ -273,17 +205,15 @@ fn test_two_live_namespaced_holders_are_still_refused() {
 
     // A is still alive. B must be refused — this is the guarantee PR #318's
     // start-time comparison would have broken, admitting two live writers.
-    let b = spawn_in_namespace(&prefix, &helper, &db, "open")
+    let b = spawn_in_namespace(&prefix, &helper, &db, "open", 0)
         .wait_with_output()
         .expect("container B ran");
     let out = String::from_utf8_lossy(&b.stdout);
     let err = String::from_utf8_lossy(&b.stderr);
 
-    // Cleanup only — B's result is already captured, so an orphan here cannot
-    // fail this test. It would still leave a namespaced process sitting on the
-    // flock for its full 300-second sleep, which on a shared CI runner is a
-    // fine way to break somebody else's test.
-    kill_holder(&prefix, &mut a);
+    // A ends itself after its bounded hold; reap it so no zombie is left.
+    let mut a = a;
+    let _ = a.wait();
 
     assert!(
         out.contains("OPEN_ERR"),
