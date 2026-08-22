@@ -33,15 +33,27 @@ fn main() {
             println!("OPEN_OK");
 
             if mode == "hold" {
-                // Hold for as long as the test asks, then die WITHOUT running
-                // Drop. A zero hold means "die as soon as the lock is held",
-                // which is what the crashed-predecessor case wants.
-                let millis: u64 = std::env::var("MINIGRAF_NS_HOLD_MILLIS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0);
-                if millis > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(millis));
+                // Hold, then die WITHOUT running Drop.
+                //
+                // If the test names a release marker, wait for it to appear.
+                // A fixed sleep cannot work here: the test must spawn a second
+                // container through `sudo unshare` and let it attempt an open,
+                // and how long that takes varies wildly between a laptop and a
+                // loaded CI runner. A fixed hold that is comfortable locally
+                // expires mid-attempt on a slow runner, the second container
+                // then succeeds, and the test fails claiming a live holder was
+                // not excluded. Letting the parent say when it is done removes
+                // the guesswork entirely.
+                //
+                // The deadline is a backstop, not the mechanism: if the parent
+                // dies without writing the marker, this process must not sit on
+                // the lock indefinitely.
+                if let Ok(marker) = std::env::var("MINIGRAF_NS_RELEASE_MARKER") {
+                    let marker = std::path::PathBuf::from(marker);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                    while !marker.exists() && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
                 }
                 // Flush stdout first: abort() will not.
                 use std::io::Write;

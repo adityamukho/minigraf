@@ -66,21 +66,25 @@ fn spawn_in_namespace(
     helper: &Path,
     db: &Path,
     mode: &str,
-    hold_millis: u64,
+    release_marker: Option<&Path>,
 ) -> std::process::Child {
-    Command::new(&prefix[0])
-        .args(&prefix[1..])
+    let mut cmd = Command::new(&prefix[0]);
+    cmd.args(&prefix[1..])
         .arg(helper)
         .arg(db)
         .arg(mode)
-        // How long the holder keeps the lock before aborting itself. See the
-        // module comment on `examples/pid_ns_helper.rs` for why the holder
-        // ends its own life rather than being killed from here.
-        .env("MINIGRAF_NS_HOLD_MILLIS", hold_millis.to_string())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn in namespace")
+        .stderr(Stdio::piped());
+
+    // With no marker the holder aborts the moment it has the lock. With one,
+    // it holds until this process creates that file. See the module comment on
+    // `examples/pid_ns_helper.rs` for why the holder ends its own life rather
+    // than being killed from here, and why the hold cannot be a fixed sleep.
+    if let Some(marker) = release_marker {
+        cmd.env("MINIGRAF_NS_RELEASE_MARKER", marker);
+    }
+
+    cmd.spawn().expect("spawn in namespace")
 }
 
 /// Path to the compiled helper binary (see `examples/pid_ns_helper.rs`).
@@ -138,7 +142,7 @@ fn test_lock_survives_holder_death_in_another_pid_namespace() {
     // container leaves behind. The holder aborts itself rather than being
     // killed from here; see the module comment on examples/pid_ns_helper.rs
     // for why killing across the privilege boundary cannot be made reliable.
-    let a = spawn_in_namespace(&prefix, &helper, &db, "hold", 0)
+    let a = spawn_in_namespace(&prefix, &helper, &db, "hold", None)
         .wait_with_output()
         .expect("container A ran");
 
@@ -159,7 +163,7 @@ fn test_lock_survives_holder_death_in_another_pid_namespace() {
         "container A must die by abort, not exit cleanly"
     );
 
-    let b = spawn_in_namespace(&prefix, &helper, &db, "open", 0)
+    let b = spawn_in_namespace(&prefix, &helper, &db, "open", None)
         .wait_with_output()
         .expect("container B ran");
 
@@ -188,11 +192,11 @@ fn test_two_live_namespaced_holders_are_still_refused() {
     let db = dir.path().join("contended.graph");
 
     // panicking (B fails to spawn/run) without leaking a namespaced holder.
-    // A bounded hold, long enough for B to be refused while A is alive, and
-    // short enough that a failure here cannot strand a namespaced process on
-    // the flock for minutes of a shared runner's time. A ends itself; nothing
-    // depends on this process being able to kill it.
-    let a = spawn_in_namespace(&prefix, &helper, &db, "hold", 2000);
+    // A holds until this process releases it, however long B takes to start
+    // and be refused. The helper caps the wait as a backstop, so a panic here
+    // cannot strand a namespaced process on the flock.
+    let release = dir.path().join("release-a");
+    let a = spawn_in_namespace(&prefix, &helper, &db, "hold", Some(&release));
     let mut held = false;
     for _ in 0..80 {
         if db.exists() && std::fs::metadata(&db).map(|m| m.len() > 0).unwrap_or(false) {
@@ -205,13 +209,14 @@ fn test_two_live_namespaced_holders_are_still_refused() {
 
     // A is still alive. B must be refused — this is the guarantee PR #318's
     // start-time comparison would have broken, admitting two live writers.
-    let b = spawn_in_namespace(&prefix, &helper, &db, "open", 0)
+    let b = spawn_in_namespace(&prefix, &helper, &db, "open", None)
         .wait_with_output()
         .expect("container B ran");
     let out = String::from_utf8_lossy(&b.stdout);
     let err = String::from_utf8_lossy(&b.stderr);
 
-    // A ends itself after its bounded hold; reap it so no zombie is left.
+    // Release A now that B's attempt is recorded, then reap it.
+    std::fs::write(&release, b"").expect("write release marker");
     let mut a = a;
     let _ = a.wait();
 
