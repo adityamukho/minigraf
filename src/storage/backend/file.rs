@@ -113,6 +113,37 @@ impl Drop for FileLock {
     }
 }
 
+/// What `FileBackend::open` should do with the result of `File::try_lock`.
+///
+/// Split out from the I/O so the unsupported-filesystem branch is testable
+/// without an exotic filesystem: no CI runner can be relied on to provide a
+/// mount whose locks fail.
+enum LockOutcome {
+    /// We hold the lock.
+    Acquired,
+    /// Another open file description holds it. May be in this process.
+    Held,
+    /// The filesystem cannot lock, and the caller did not opt in to running
+    /// without one.
+    Unsupported(std::io::Error),
+    /// The filesystem cannot lock and the caller accepted the risk.
+    ProceedUnlocked,
+}
+
+/// Decide what a `try_lock` result means.
+///
+/// `allow_unlocked` is consulted ONLY for `TryLockError::Error`, never for
+/// `WouldBlock`. Letting it bypass a live lock would reintroduce the
+/// two-writers-one-file corruption the lock exists to prevent.
+fn classify(result: Result<(), std::fs::TryLockError>, allow_unlocked: bool) -> LockOutcome {
+    match result {
+        Ok(()) => LockOutcome::Acquired,
+        Err(std::fs::TryLockError::WouldBlock) => LockOutcome::Held,
+        Err(std::fs::TryLockError::Error(_)) if allow_unlocked => LockOutcome::ProceedUnlocked,
+        Err(std::fs::TryLockError::Error(e)) => LockOutcome::Unsupported(e),
+    }
+}
+
 /// File-based storage backend for native platforms.
 ///
 /// Stores graph data in a single `.graph` file with a page-based structure:
@@ -473,5 +504,43 @@ mod tests {
 
         backend.write_page(2, &vec![0u8; PAGE_SIZE]).unwrap();
         assert_eq!(backend.page_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_classify_ok_is_acquired() {
+        assert!(matches!(classify(Ok(()), false), LockOutcome::Acquired));
+        assert!(matches!(classify(Ok(()), true), LockOutcome::Acquired));
+    }
+
+    #[test]
+    fn test_classify_would_block_is_held_regardless_of_allow_unlocked() {
+        // allow_unlocked must NOT override a live lock: doing so reintroduces
+        // exactly the cross-process corruption the lock exists to prevent.
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::WouldBlock), false),
+            LockOutcome::Held
+        ));
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::WouldBlock), true),
+            LockOutcome::Held
+        ));
+    }
+
+    #[test]
+    fn test_classify_unsupported_fails_closed_by_default() {
+        let e = std::io::Error::from_raw_os_error(95); // ENOTSUP
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::Error(e)), false),
+            LockOutcome::Unsupported(_)
+        ));
+    }
+
+    #[test]
+    fn test_classify_unsupported_proceeds_when_allowed() {
+        let e = std::io::Error::from_raw_os_error(37); // ENOLCK
+        assert!(matches!(
+            classify(Err(std::fs::TryLockError::Error(e)), true),
+            LockOutcome::ProceedUnlocked
+        ));
     }
 }
