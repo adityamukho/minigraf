@@ -124,6 +124,9 @@ appear in runtime output today — runtime codes are tracked in
 | STG-022 | Page id overflow writing fact pages | Storage |
 | STG-023 | Page index exceeds u64::MAX | Storage |
 | STG-024 | Pending fact count exceeds u64::MAX | Storage |
+| STG-025 | Database already open in this process | Storage |
+| STG-026 | Database locked by another process | Storage |
+| STG-027 | Filesystem does not support file locking | Storage |
 | WAL-001 | Invalid WAL magic number | WAL |
 | WAL-002 | Unsupported WAL version | WAL |
 | WAL-003 | Fact serialised size exceeds maximum | WAL |
@@ -1788,6 +1791,50 @@ See the [file format section in README](../README.md#file-format) for version hi
 - This should never occur under normal operation. File a bug.
 
 **Scenario**: An extremely long-running write session accumulated more unflushed facts than u64 can count.
+
+---
+
+### STG-025 Database already open in this process
+
+**Error text**: `Database is already open in this process ({path}). A second handle on one file would give each its own page table and corrupt both — reuse the existing handle instead. \`Minigraf\` is cheap to clone and all clones share the same database.`
+
+**Cause**: This process already holds an open handle on this file. Two `FileBackend` instances on one file each cache their own `header.page_count`, allocate new pages from that count, and bounds-check reads against it, so the two page tables diverge and produce intermittent `Page N out of bounds` errors.
+
+**Resolution**:
+- Reuse the handle you already have. `Minigraf` is cheap to clone and all clones share one database.
+- If you cannot find the other handle, it is usually held by a longer-lived object than you expect — a cache, a registry, or a background task.
+
+**Scenario**: A request handler calls `Minigraf::open` per request while a connection pool already holds the same path open.
+
+---
+
+### STG-026 Database locked by another process
+
+**Error text**: `Database is locked by another process ({path}). The lock is held on the file itself and is released automatically when the holding process exits, so there is no lock file to clean up.`
+
+**Cause**: Another process holds the kernel file lock on this `.graph` file. Minigraf is single-writer: one process at a time. This is reported only after a bounded retry (up to ~375ms) rules out a transient `fork`-related false positive — see the Unreleased CHANGELOG entry on the bounded retry.
+
+**Resolution**:
+- Wait for the other process to exit; the kernel releases the lock automatically, including when the process is killed.
+- There is no lock file to delete. If you find a stale `.graph.lock`, it is a leftover from a version before 1.3 and has no effect — it is not read or deleted, and should not be removed by hand in case an old process still depends on it.
+- If two services genuinely need the same file, put one in front of the other. Minigraf is embedded, not a server.
+
+**Scenario**: A rolling deployment starts the new pod before the old one has exited, and both mount the same volume.
+
+---
+
+### STG-027 Filesystem does not support file locking
+
+**Error text**: `Failed to lock database at {path}: {e}. This filesystem does not support file locking (common on NFSv3 without lockd, and on some FUSE mounts). Set \`allow_unlocked\` in \`OpenOptions\` to open anyway — that accepts the risk that concurrent writers corrupt the file.`
+
+**Cause**: The underlying filesystem rejected the lock outright. Common on NFSv3 mounts with no `lockd` running, and on some FUSE filesystems. Because the file must exist before it can be locked, this refusal can leave a 0-byte `.graph` file behind; the next open sees `is_new` and initialises normally.
+
+**Resolution**:
+- Prefer moving the database to a filesystem that supports locking — this is the safe fix.
+- On NFS, ensure NFSv4, or start `lockd` for NFSv3.
+- If you are certain there is exactly one writer, set `OpenOptions::allow_unlocked(true)`. This accepts the risk that concurrent writers corrupt the file; Minigraf cannot detect them without a working lock.
+
+**Scenario**: A `.graph` file placed on an NFSv3 export whose `lockd` is not running.
 
 ---
 

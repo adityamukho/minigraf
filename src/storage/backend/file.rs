@@ -64,7 +64,11 @@ impl Drop for PathGuard {
     }
 }
 
-/// True if this process already has `path` open. Diagnostic only.
+/// True if this process already has `path` open.
+///
+/// Not diagnostic-only: besides choosing which error message to print, this
+/// also gates whether `open_with` retries a `WouldBlock` at all (see
+/// `OPEN_PATHS` above).
 fn already_open_here(path: &Path) -> bool {
     OPEN_PATHS
         .lock()
