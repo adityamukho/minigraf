@@ -2,7 +2,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use minigraf::QueryResult;
-use minigraf::db::Minigraf;
+use minigraf::db::{Minigraf, OpenOptions};
 
 const PAGE_SIZE: usize = 4096;
 const MAGIC_NUMBER: [u8; 4] = *b"MGRF";
@@ -12,6 +12,87 @@ fn count_results(r: QueryResult) -> usize {
         QueryResult::QueryResults { results, .. } => results.len(),
         _ => 0,
     }
+}
+
+/// Serializes `Command::spawn` calls within this test binary.
+///
+/// `Command::spawn` forks the whole (multi-threaded) test process before
+/// exec'ing the child. Until that child reaches `execve` and its
+/// close-on-exec descriptors are closed, it transiently holds a duplicate of
+/// every flock any other thread's test currently has open on a `.graph`
+/// file — which can make an unrelated, concurrent `try_lock()` elsewhere in
+/// this binary observe `WouldBlock` for a few microseconds and fail with
+/// "Database is locked by another process", even though no other process
+/// was ever really involved. Capping this binary to one fork in flight at a
+/// time keeps that window rare enough not to flake the suite.
+static CRASH_CHILD_SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs a child process that opens `db_path`, executes `statements`, then dies
+/// by `abort()` without running any `Drop`.
+///
+/// This is a real crash, not a simulated one: the child's file descriptors are
+/// closed by the kernel, which releases the file lock exactly as it would for a
+/// SIGKILLed container. Forgetting the handle in-process cannot model this — it
+/// leaks the `File`, so the lock stays held for the life of the test process.
+fn run_crashing_child(
+    db_path: &std::path::Path,
+    wal_checkpoint_threshold: usize,
+    statements: &[&str],
+) {
+    let exe = std::env::current_exe().expect("test binary path");
+    let status = {
+        let _guard = CRASH_CHILD_SPAWN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::process::Command::new(exe)
+            .args(["crash_child_entrypoint", "--exact", "--nocapture"])
+            .env("MINIGRAF_CRASH_DB", db_path)
+            .env("MINIGRAF_CRASH_THRESHOLD", wal_checkpoint_threshold.to_string())
+            .env("MINIGRAF_CRASH_STMTS", statements.join("\u{1e}"))
+            .status()
+            .expect("spawn crash child")
+    };
+
+    // On Unix `abort()` raises SIGABRT and `code()` is None. On Windows it
+    // terminates with a nonzero exit code instead. The property that matters
+    // on both is that the child did not exit cleanly.
+    assert!(
+        status.code().unwrap_or(1) != 0,
+        "crash child must not exit cleanly"
+    );
+}
+
+/// The child half of [`run_crashing_child`]. A no-op in ordinary test runs.
+///
+/// This is a `#[test]` purely so the harness will dispatch to it by name; when
+/// the marker environment variable is absent it returns immediately.
+#[test]
+fn crash_child_entrypoint() {
+    let Ok(db_path) = std::env::var("MINIGRAF_CRASH_DB") else {
+        return;
+    };
+    let threshold: usize = std::env::var("MINIGRAF_CRASH_THRESHOLD")
+        .expect("threshold")
+        .parse()
+        .expect("threshold is a number");
+    let stmts = std::env::var("MINIGRAF_CRASH_STMTS").expect("statements");
+
+    let db = Minigraf::open_with_options(
+        &db_path,
+        OpenOptions {
+            wal_checkpoint_threshold: threshold,
+            ..Default::default()
+        },
+    )
+    .expect("child opens db");
+
+    for stmt in stmts.split('\u{1e}').filter(|s| !s.is_empty()) {
+        db.execute(stmt).expect("child statement");
+    }
+
+    // Die without running Drop, so no checkpoint happens and the WAL is left
+    // for the next open to replay.
+    std::process::abort();
 }
 
 #[test]
@@ -93,20 +174,9 @@ fn wal_replay_after_migration_is_idempotent() {
         db.execute(r#"(transact [[:e1 :color "red"]])"#).unwrap();
         db.checkpoint().unwrap();
     }
-    {
-        let db = Minigraf::open(&path).unwrap();
-        db.execute(r#"(transact [[:e2 :color "blue"]])"#).unwrap();
-        // Simulate a crash: no Drop, so no checkpoint, and the WAL is left for
-        // the next open to replay.
-        std::mem::forget(db);
-    }
-    // mem::forget also skips FileLock::drop, leaving the sidecar lock behind
-    // holding OUR pid. A lock held by a live pid means a handle that is open
-    // right now, so reopening is correctly refused (#304) -- but that is not
-    // what a crash leaves behind. Clear it, which models the state the next
-    // open finds once a crashed holder is cleaned up. The WAL-replay assertion
-    // below is unchanged.
-    std::fs::remove_file(path.with_extension("graph.lock")).unwrap();
+    // Crash before checkpoint: no Drop runs, so the WAL is left for the next
+    // open to replay.
+    run_crashing_child(&path, 1000, &[r#"(transact [[:e2 :color "blue"]])"#]);
     let db3 = Minigraf::open(&path).unwrap();
     let n = count_results(
         db3.execute("(query [:find ?c :where [?e :color ?c]])")
