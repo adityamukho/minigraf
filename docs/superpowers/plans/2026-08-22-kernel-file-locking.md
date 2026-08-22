@@ -598,9 +598,12 @@ fn run_crashing_child(
         .status()
         .expect("spawn crash child");
 
+    // On Unix `abort()` raises SIGABRT and `code()` is None. On Windows it
+    // terminates with a nonzero exit code instead. The property that matters
+    // on both is that the child did not exit cleanly.
     assert!(
-        status.code().is_none(),
-        "crash child must die by signal (abort), not exit normally"
+        status.code().unwrap_or(1) != 0,
+        "crash child must not exit cleanly"
     );
 }
 
@@ -704,6 +707,7 @@ reach tests/, and #[doc(hidden)] pub would be callable in production."
 
 **Files:**
 - Create: `tests/pid_namespace_test.rs`
+- Create: `examples/pid_ns_helper.rs`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -924,13 +928,19 @@ Expected: PASS, 2 tests (or SKIP with a printed reason if namespaces are unavail
 
 Confirm the test has real catching power by checking it against the old behaviour:
 
+`git stash` cannot help here: Tasks 1 and 2 are already committed, and stash only touches uncommitted work. Use a throwaway worktree at the pre-fix commit instead. The test uses only the public `Minigraf::open` API, so it compiles unchanged against the old code.
+
 ```bash
-git stash
-cargo build --examples && cargo test --test pid_namespace_test -- --nocapture
-git stash pop
+TMP=$(mktemp -d)
+git worktree add "$TMP/prefix" e056905
+cp tests/pid_namespace_test.rs "$TMP/prefix/tests/"
+cp examples/pid_ns_helper.rs "$TMP/prefix/examples/"
+(cd "$TMP/prefix" && cargo build --examples && cargo test --test pid_namespace_test -- --nocapture)
+git worktree remove --force "$TMP/prefix"
+rm -rf "$TMP"
 ```
 
-Expected: `test_lock_survives_holder_death_in_another_pid_namespace` FAILS against the pre-fix code, reporting that container B could not open the database. If it passes, the test is not reproducing #317 and must be fixed before continuing.
+Expected: `test_lock_survives_holder_death_in_another_pid_namespace` FAILS against the pre-fix code, reporting that container B could not open the database. If it passes, the test is not reproducing #317 and must be fixed before continuing. Report the observed failure output in your report file.
 
 - [ ] **Step 5: Commit**
 
@@ -1121,11 +1131,15 @@ mandatory locks) so the release decision can be made later.
 Adds STG-025 through STG-027; the lock errors had no reference entries."
 ```
 
-The `.wiki/` directory is a separate git repository. Commit and push it on its own:
+The `.wiki/` directory is a separate git repository AND it does not exist in this worktree — it is a plain clone that lives only in the main checkout. Make the wiki edit there, and commit it in that repository:
 
 ```bash
-cd .wiki && git add -A && git commit -m "docs: kernel file locking replaces the PID sidecar" && git push && cd ..
+cd /home/aditya/Work/AMC/Minigraf/minigraf/.wiki
+# edit Architecture.md as described above
+git add -A && git commit -m "docs: kernel file locking replaces the PID sidecar"
 ```
+
+Do NOT push. Pushing the wiki is a shared-branch side effect for the human to authorise.
 
 ---
 
