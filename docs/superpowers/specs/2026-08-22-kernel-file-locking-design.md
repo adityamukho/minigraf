@@ -116,10 +116,12 @@ message. This is **purely diagnostic**; correctness comes from the kernel. If
 
 ### `allow_unlocked`
 
-`OpenOptions` is a plain public-field struct, so this is a field:
+`OpenOptions` exposes both public fields and chainable builder methods (see
+`page_cache_size`), so this needs both, to match the existing pattern:
 
 ```rust
-pub allow_unlocked: bool,   // default: false
+pub allow_unlocked: bool,                                   // default: false
+pub fn allow_unlocked(self, allow: bool) -> Self;           // builder
 ```
 
 Consulted **only** when locking is unsupported. It never overrides a live `WouldBlock`
@@ -168,8 +170,8 @@ versions is unsupported and documented as such: upgrade all writers together.
 
 `run_crashing_child()` re-execs the test binary via `current_exe()` with an env marker;
 the child opens, writes, and `abort()`s. The kernel releases the lock on death, exactly
-as in production. Each of the 23 `mem::forget` sites in `tests/wal_test.rs` and
-`tests/migration_matrix_test.rs` becomes a one-line call, and `simulate_crashed_holder`
+as in production. Each of the 14 crash-simulation call sites (13 in `tests/wal_test.rs`, 1 in
+`tests/migration_matrix_test.rs`) becomes a one-line call, and `simulate_crashed_holder`
 (`tests/wal_test.rs:840`) is deleted.
 
 No test hook ships in the crate. `#[doc(hidden)] pub` would be callable in production,
@@ -212,8 +214,8 @@ plus a fresh PID-1 process, which tier 1 already covers, and `kind` provisions
 | `src/storage/backend/file.rs` | Delete `FileLock`/`is_process_alive`; lock the fd; `classify`; rewrite 3 unit tests |
 | `src/db.rs` | `OpenOptions::allow_unlocked` field + docs |
 | `Cargo.toml` | `rust-version = "1.89"` |
-| `tests/wal_test.rs` | `run_crashing_child`; convert sites; delete `simulate_crashed_holder` |
-| `tests/migration_matrix_test.rs` | Convert remaining sites |
+| `tests/wal_test.rs` | `run_crashing_child`; convert 13 sites; delete `simulate_crashed_holder` |
+| `tests/migration_matrix_test.rs` | Convert 1 site |
 | `tests/pid_namespace_test.rs` | New — tier 1 |
 | `.github/workflows/nfs-lock.yml` | New — tiers 2 and 3 |
 | `CHANGELOG.md` | Unreleased entry recording new API, MSRV bump, behaviour change |
