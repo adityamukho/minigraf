@@ -56,6 +56,17 @@ fn is_write_tx_active() -> bool {
     WRITE_TX_ACTIVE.with(|f| f.get())
 }
 
+// ─── Page cache sizing ─────────────────────────────────────────────────────────
+
+/// Page cache capacity to use for an in-memory (`MemoryBackend`) database.
+///
+/// `MemoryBackend` serves every read and write directly from RAM and never
+/// consults the page cache, so `opts.page_cache_size` — which only affects
+/// file-backed databases — is ignored here and zero capacity is always used.
+fn memory_page_cache_capacity(_opts: &OpenOptions) -> usize {
+    0
+}
+
 // ─── OpenOptions ─────────────────────────────────────────────────────────────
 
 /// Configuration options for opening a `Minigraf` database.
@@ -67,6 +78,10 @@ pub struct OpenOptions {
     /// more I/O). Higher values mean less frequent checkpoints (larger WAL, less I/O).
     pub wal_checkpoint_threshold: usize,
     /// Number of pages to hold in the LRU page cache. Default: 256 (= 1MB at 4KB pages).
+    ///
+    /// **File-backed databases only.** In-memory databases (`Minigraf::in_memory`,
+    /// `open_memory`) ignore this option — `MemoryBackend` serves every read and
+    /// write directly from RAM and never consults the page cache.
     pub page_cache_size: usize,
     /// Maximum facts that can be derived per recursive rule iteration.
     /// Defaults to 1_000_000. Use to prevent runaway recursive rules.
@@ -106,6 +121,9 @@ impl OpenOptions {
     /// Set the number of pages to hold in the LRU page cache.
     ///
     /// Each page is 4KB, so the default of 256 pages uses ~1MB of memory.
+    ///
+    /// **File-backed databases only** — ignored when opening an in-memory
+    /// database (see [`OpenOptions::page_cache_size`]).
     pub fn page_cache_size(mut self, size: usize) -> Self {
         self.page_cache_size = size;
         self
@@ -358,14 +376,15 @@ impl Minigraf {
 
     /// Create an in-memory database with custom options.
     ///
-    /// Note: WAL-related options are ignored for in-memory databases.
+    /// Note: WAL-related options are ignored for in-memory databases, as is
+    /// `page_cache_size` (see [`OpenOptions::page_cache_size`]).
     ///
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
     pub fn in_memory_with_options(opts: OpenOptions) -> Result<Self> {
         let backend = MemoryBackend::new();
-        let pfs = PersistentFactStorage::new(backend, opts.page_cache_size)?;
+        let pfs = PersistentFactStorage::new(backend, memory_page_cache_capacity(&opts))?;
         let fact_storage = pfs.storage().clone();
 
         // For in-memory databases we don't need the PFS beyond initialisation;
@@ -1194,6 +1213,20 @@ mod tests {
 
         let facts = db.inner.fact_storage.get_asserted_facts().unwrap();
         assert_eq!(facts.len(), 2, "expected 2 facts after 2 transacts");
+    }
+
+    #[test]
+    fn test_in_memory_page_cache_size_ignored() {
+        // In-memory databases never consult the page cache (`MemoryBackend`
+        // serves every read/write directly from RAM), so `page_cache_size`
+        // must be ignored and the underlying `PageCache` always constructed
+        // with zero capacity — regardless of what the caller requests. This
+        // mirrors exactly what `Minigraf::in_memory_with_options` does.
+        let opts = OpenOptions::default().page_cache_size(4096);
+        let pfs =
+            PersistentFactStorage::new(MemoryBackend::new(), memory_page_cache_capacity(&opts))
+                .unwrap();
+        assert_eq!(pfs.page_cache_capacity(), 0);
     }
 
     // ── begin_write / commit ─────────────────────────────────────────────────

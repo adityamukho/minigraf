@@ -196,6 +196,12 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         Ok(persistent)
     }
 
+    /// The LRU page cache capacity this storage was constructed with (for testing).
+    #[allow(dead_code)]
+    pub(crate) fn page_cache_capacity(&self) -> usize {
+        self.page_cache.capacity()
+    }
+
     /// Load all facts from the backend into memory.
     fn load(&mut self) -> Result<()> {
         let (header, raw_header_bytes) = {
@@ -1267,6 +1273,15 @@ mod tests {
     use crate::storage::backend::MemoryBackend;
     use std::io::Write;
     use uuid::Uuid;
+
+    #[test]
+    fn test_page_cache_capacity_reflects_constructed_value() {
+        let zero_cap = PersistentFactStorage::new(MemoryBackend::new(), 0).unwrap();
+        assert_eq!(zero_cap.page_cache_capacity(), 0);
+
+        let nonzero_cap = PersistentFactStorage::new(MemoryBackend::new(), 64).unwrap();
+        assert_eq!(nonzero_cap.page_cache_capacity(), 64);
+    }
 
     #[test]
     fn test_persistent_fact_storage_new() {
