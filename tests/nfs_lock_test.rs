@@ -9,6 +9,12 @@
 //! is provisioned by `.github/workflows/nfs-lock.yml`, not by this file. They
 //! skip cleanly when the environment variables they need are unset, so plain
 //! `cargo test` never touches them.
+//!
+//! `MINIGRAF_NFS_TEST_DIR_V3_NOLOCK` is intentionally not set by that
+//! workflow (#334): the `nolock` mount option is a documented-unsupported
+//! deployment (docs/ERROR_REFERENCE.md STG-027), not a case CI gates on.
+//! The three tests gated on it below are kept for local reproduction against
+//! a manually mounted `-o nolock` export; nightly CI always skips them.
 #![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
