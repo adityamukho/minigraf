@@ -51,8 +51,11 @@ impl BrowserDb {
     #[wasm_bindgen(js_name = openInMemory)]
     pub fn open_in_memory() -> Result<BrowserDb, JsValue> {
         let buffer = BrowserBufferBackend::new();
-        let pfs = PersistentFactStorage::new(buffer, 256)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        // Page cache capacity 0: `BrowserBufferBackend` is already an in-memory
+        // page store, so the LRU cache would only duplicate pages and add
+        // HashMap overhead for zero benefit. See #275.
+        let pfs =
+            PersistentFactStorage::new(buffer, 0).map_err(|e| JsValue::from_str(&e.to_string()))?;
         let fact_storage = pfs.storage().clone();
 
         Ok(BrowserDb {
@@ -76,8 +79,9 @@ impl BrowserDb {
         let existing = idb.load_all_pages().await?;
 
         let buffer = BrowserBufferBackend::load_pages(existing);
-        let pfs = PersistentFactStorage::new(buffer, 256)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        // Page cache capacity 0 — see comment in `open_in_memory` above.
+        let pfs =
+            PersistentFactStorage::new(buffer, 0).map_err(|e| JsValue::from_str(&e.to_string()))?;
         let fact_storage = pfs.storage().clone();
 
         Ok(BrowserDb {
@@ -215,7 +219,8 @@ impl BrowserDb {
         let (dirty_pages, has_idb) = {
             let mut inner = self.inner.borrow_mut();
             let buffer = BrowserBufferBackend::load_pages_all_dirty(pages);
-            let mut new_pfs = PersistentFactStorage::new(buffer, 256)
+            // Page cache capacity 0 — see comment in `open_in_memory` above.
+            let mut new_pfs = PersistentFactStorage::new(buffer, 0)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let new_fact_storage = new_pfs.storage().clone();
 
@@ -478,6 +483,36 @@ mod tests {
             "expected 1 age result from native fixture"
         );
         assert_eq!(results2[0][0], serde_json::Value::Number(30.into()));
+    }
+
+    /// #275: `BrowserBufferBackend` is already an in-memory page store, so the
+    /// `PersistentFactStorage` LRU page cache is redundant on top of it and
+    /// should be disabled (capacity 0) for all three `BrowserDb` constructors.
+    #[wasm_bindgen_test]
+    async fn open_in_memory_disables_page_cache() {
+        let db = BrowserDb::open_in_memory().expect("open_in_memory");
+        assert_eq!(db.inner.borrow().pfs.page_cache_capacity(), 0);
+    }
+
+    #[wasm_bindgen_test]
+    async fn open_disables_page_cache() {
+        let db = BrowserDb::open("minigraf-test-zero-page-cache-open")
+            .await
+            .expect("open");
+        assert_eq!(db.inner.borrow().pfs.page_cache_capacity(), 0);
+    }
+
+    #[wasm_bindgen_test]
+    async fn import_graph_disables_page_cache() {
+        let db = BrowserDb::open_in_memory().expect("open_in_memory");
+        db.execute(r#"(transact [[:e :v 1]])"#.to_string())
+            .await
+            .expect("transact");
+        let blob = db.export_graph().expect("export");
+
+        let db2 = BrowserDb::open_in_memory().expect("open_in_memory 2");
+        db2.import_graph(blob).await.expect("import");
+        assert_eq!(db2.inner.borrow().pfs.page_cache_capacity(), 0);
     }
 
     #[wasm_bindgen_test]

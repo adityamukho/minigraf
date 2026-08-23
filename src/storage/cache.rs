@@ -62,6 +62,12 @@ impl PageCache {
     /// Create a new page cache with the given page capacity.
     ///
     /// `capacity = 256` means at most 256 × 4KB = 1MB of cached pages.
+    ///
+    /// `capacity = 0` **disables the cache entirely**: `get_or_load` always
+    /// reads through to the backend and `put_dirty` is a no-op. Use this when
+    /// the backend itself is already an in-memory page store (e.g. a
+    /// `HashMap`-backed buffer), so this LRU layer would only add duplicate
+    /// storage and bookkeeping overhead on top of an already-resident page.
     pub fn new(capacity: usize) -> Self {
         PageCache {
             inner: RwLock::new(CacheInner {
@@ -82,6 +88,10 @@ impl PageCache {
                 .inner
                 .read()
                 .map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+            // Capacity 0 disables the cache: always read through, no bookkeeping.
+            if inner.capacity == 0 {
+                return Ok(Arc::new(backend.read_page(page_id)?));
+            }
             if let Some(entry) = inner.entries.get(&page_id) {
                 return Ok(entry.data.clone());
             }
@@ -118,6 +128,10 @@ impl PageCache {
     /// Insert or update a page in the cache and mark it dirty.
     pub fn put_dirty(&self, page_id: u64, data: Vec<u8>) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        // Capacity 0 disables the cache: nothing to prime, next get_or_load reads through.
+        if inner.capacity == 0 {
+            return;
+        }
         let data = Arc::new(data);
         if inner.entries.contains_key(&page_id) {
             // Update in place, move to MRU
@@ -184,6 +198,16 @@ impl PageCache {
             .unwrap_or_else(|e| e.into_inner())
             .entries
             .len()
+    }
+
+    /// Configured capacity (in pages). `0` means the cache is disabled — see
+    /// [`PageCache::new`].
+    #[allow(dead_code)]
+    pub fn capacity(&self) -> usize {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .capacity
     }
 }
 
@@ -284,6 +308,31 @@ mod tests {
         // Page 4 must now be loadable from cache (just loaded)
         // We can't directly inspect the cache, but we can verify capacity is respected
         assert!(cache.cached_page_count() == 3);
+    }
+
+    #[test]
+    fn test_zero_capacity_disables_caching() {
+        let mut backend = MemoryBackend::new();
+        for i in 1u64..=10 {
+            backend.write_page(i, &make_page(i as u8)).unwrap();
+        }
+        let cache = PageCache::new(0);
+        assert_eq!(cache.capacity(), 0);
+        for i in 1u64..=10 {
+            let page = cache.get_or_load(i, &backend).unwrap();
+            assert_eq!(page[0], i as u8);
+        }
+        // Nothing should have been retained: capacity 0 means "no cache", not
+        // "unbounded cache" — every load must read straight through and leave
+        // no trace behind.
+        assert_eq!(cache.cached_page_count(), 0);
+    }
+
+    #[test]
+    fn test_zero_capacity_put_dirty_is_noop() {
+        let cache = PageCache::new(0);
+        cache.put_dirty(1, make_page(0xAA));
+        assert_eq!(cache.cached_page_count(), 0);
     }
 
     /// Regression test for: put_dirty on a cached page after an eviction caused
