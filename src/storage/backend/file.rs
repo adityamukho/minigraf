@@ -165,7 +165,7 @@ impl FileBackend {
         Self::open_with(path, false)
     }
 
-    /// As [`FileBackend::open`], but `allow_unlocked` permits opening on a
+    /// As `FileBackend::open` (test-only), but `allow_unlocked` permits opening on a
     /// filesystem that cannot lock at all.
     ///
     /// `allow_unlocked` does NOT override a lock held by someone else. It
