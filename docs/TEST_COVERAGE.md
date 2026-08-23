@@ -746,7 +746,7 @@ summaries.
 
 - ✅ `xtdb_basic_find_by_attribute_value` — finds all entities with a given attribute value (`:profession "painter"`)
 - ✅ `xtdb_multi_attribute_join` — multi-pattern join returns only entities satisfying both patterns (`:role "admin"` and `:active true`)
-- ✅ `xtdb_entity_reference_join` — entities sharing a reference-valued attribute (`:dept :dept-eng`) are found by pattern match
+- ✅ `xtdb_entity_reference_join` — entities sharing the same keyword-valued attribute (`:dept :dept-eng`, a bare keyword rather than a `Value::Ref`) are found by pattern-matching on that shared value
 - ✅ `xtdb_retraction_removes_specific_fact` — retracting one fact leaves other facts on the same entity intact
 - ✅ `xtdb_retracted_fact_not_visible` — a retracted fact is absent from the current-time query result
 - ✅ `xtdb_as_of_returns_past_state` — `:as-of` by tx_count returns the value that held before a later retract+transact pair
@@ -761,15 +761,15 @@ summaries.
 
 ### Datomic Compatibility (`tests/datomic_compat_test.rs`) - ✅ 11 tests (Wave 3 #221)
 
-- ✅ `datomic_entity_attributes_are_independent_facts` — EAV datom model: each attribute independently queryable
-- ✅ `datomic_multiple_entities_same_attribute` — multiple entities share the same attribute; all (entity, value) pairs returned
-- ✅ `datomic_transaction_time_as_of` — `:as-of tx_count` matches Datomic transaction-time semantics
-- ✅ `datomic_retract_all_entity_facts` — fully-retracted entity absent from all queries
-- ✅ `datomic_multi_variable_find` — multi-variable `:find` returns correct tuple count
-- ✅ `datomic_ground_value_binding` — constant binding in `:where` clause filters correctly
-- ✅ `datomic_parameterized_query_prepared` — prepared `$slot` bindings match Datomic `:in` clause semantics
-- ✅ `datomic_named_rule_reuse` — named reusable rules match Datomic rule semantics
-- ✅ `datomic_predicate_expression_filter` — predicate expression `[(>= ?a 18)]` matches Datomic expression clause semantics
+- ✅ `datomic_entity_attributes_are_independent_facts` — entity `:user42` gets three independent attribute facts (`:user/name`, `:user/email`, `:user/role`); each is separately queryable via its own `:where` pattern, confirming the EAV datom model
+- ✅ `datomic_multiple_entities_same_attribute` — three entities (`:article1`–`:article3`) each carry their own `:tag` fact; `[:find ?e ?t :where [?e :tag ?t]]` returns all 3 (entity, value) pairs independently
+- ✅ `datomic_transaction_time_as_of` — tx1 sets `:qty 10`, tx2 retracts it, tx3 sets `:qty 20`; querying `:as-of 1` (with `:valid-at :any-valid-time`) still recovers `qty = 10`, matching Datomic's transaction-time semantics
+- ✅ `datomic_retract_all_entity_facts` — retracting all three facts on `:ghost` (`:name`, `:age`, `:role`) individually leaves the entity absent from any subsequent query, mirroring Datomic's `:db/retractEntity`
+- ✅ `datomic_multi_variable_find` — two people (`:p1`/Alice/30, `:p2`/Bob/25) joined on `?e` via `[:find ?n ?a :where [?e :person/name ?n] [?e :person/age ?a]]` return exactly 2 name+age tuples
+- ✅ `datomic_ground_value_binding` — filtering `[?e :score 10]` against four entities (`:a`–`:d`) with mixed scores returns only the two (`:a`, `:c`) whose score matches the ground constant
+- ✅ `datomic_parameterized_query_prepared` — a prepared query with a `$target` slot is executed twice against the same fact set, returning 2 results for `target=42` and 1 for `target=7`, matching Datomic's `:in`-clause parameterization
+- ✅ `datomic_named_rule_reuse` — a `likes-transitively` rule pair (base case plus recursive case) evaluated over a 3-node cycle (`:a`→`:b`→`:c`→`:a`) finds at least 3 pairs, confirming transitive closure through rule reuse
+- ✅ `datomic_predicate_expression_filter` — `[(>= ?a 18)]` filters four ages (25, 35, 15, 40) down to the three adults, matching Datomic's expression-clause predicate semantics
 - ✅ `datomic_attribute_keyword_may_end_in_question_mark` — predicate-style keyword attribute (`:person/alive?`) is queryable and binds correctly by value (regression: `?` used to terminate the keyword token)
 - ✅ `datomic_keyword_value_may_end_in_question_mark` — a keyword value ending in `?` (`:ready?`) matches by value and round-trips through storage
 
