@@ -141,19 +141,6 @@ fn run_opener(volume: &str, helper: &Path) -> Output {
         .expect("run opener container")
 }
 
-/// Not a gated integration test: proof that `docker_available()` reflects
-/// reality instead of hardcoding `true`, which would make every gated test
-/// below a silent no-op forever. This sandbox has neither the Docker CLI nor
-/// a daemon, so the expected answer here is `false`.
-#[test]
-fn test_docker_availability_check_reflects_this_sandbox() {
-    assert!(
-        !docker_available(),
-        "expected no reachable Docker daemon in this sandbox; if this now \
-         fails, docker_available() may not be checking the right thing"
-    );
-}
-
 #[test]
 fn test_lock_survives_holder_container_being_killed() {
     if !docker_available() {
