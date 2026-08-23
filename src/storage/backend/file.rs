@@ -89,6 +89,26 @@ fn already_open_here(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Atomically test-and-set `path` into `OPEN_PATHS`, admitting only the
+/// first caller.
+///
+/// Used by the `ProceedUnlocked` arm, where there is no kernel lock and this
+/// registry is the only thing preventing two handles on one unlockable path
+/// (#304). Must be a single critical section: checking with
+/// `already_open_here` and inserting afterwards would let two threads both
+/// observe "absent" and both proceed. A poisoned mutex yields `false`, so
+/// this fails CLOSED rather than admitting a second handle it cannot
+/// account for.
+///
+/// Split out from `open_with` so the race can be exercised directly (#330)
+/// instead of needing a genuinely lock-incapable filesystem.
+fn claim_unlocked_path(path: &Path) -> bool {
+    OPEN_PATHS
+        .lock()
+        .map(|mut open| open.insert(path.to_path_buf()))
+        .unwrap_or(false)
+}
+
 /// How many times to retry a cross-process `WouldBlock` before concluding
 /// another process genuinely holds the lock.
 ///
@@ -248,24 +268,9 @@ impl FileBackend {
                 // merely diagnostic here: it is the only thing standing
                 // between us and the #304 two-page-tables corruption if a
                 // second handle in this process opens the same unlockable
-                // path.
-                //
-                // Because it is the only guard, the check and the insert must
-                // be ONE atomic operation. Reading through `already_open_here`
-                // and inserting afterwards releases the mutex in between, and
-                // two threads opening the same path would then both observe
-                // "absent", both insert, and both proceed. `HashSet::insert`
-                // returns false when the key was already present, which gives
-                // us test-and-set under a single lock acquisition.
-                //
-                // A poisoned mutex yields `false` here, so it fails CLOSED:
-                // we refuse to open rather than risk admitting a second
-                // handle we cannot account for.
-                let inserted = OPEN_PATHS
-                    .lock()
-                    .map(|mut open| open.insert(canonical.clone()))
-                    .unwrap_or(false);
-                if !inserted {
+                // path. See `claim_unlocked_path` for why the check and
+                // insert must be one atomic operation.
+                if !claim_unlocked_path(&canonical) {
                     anyhow::bail!(
                         "Database is already open in this process ({}). A second handle \
                          on one file would give each its own page table and corrupt both \
@@ -770,5 +775,38 @@ mod tests {
             classify(Err(std::fs::TryLockError::Error(e)), true),
             LockOutcome::ProceedUnlocked
         ));
+    }
+
+    #[test]
+    fn test_claim_unlocked_path_race_admits_only_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::sync::Arc::new(dir.path().join("race.graph"));
+
+        const THREADS: usize = 16;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_unlocked_path(&path)
+                })
+            })
+            .collect();
+
+        let admitted = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|&admitted| admitted)
+            .count();
+
+        OPEN_PATHS.lock().unwrap().remove(path.as_path());
+
+        assert_eq!(
+            admitted, 1,
+            "exactly one concurrent claimant should be admitted"
+        );
     }
 }
