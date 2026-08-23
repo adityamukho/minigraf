@@ -272,7 +272,7 @@ fn test_manual_checkpoint_deletes_wal() {
     );
     assert_eq!(
         n2, 1,
-        "Alice must be present after crash-reopen when already checkpointed"
+        "Alice must be present after reopen when already checkpointed"
     );
 }
 
@@ -305,16 +305,15 @@ fn test_auto_checkpoint_fires_at_threshold() {
             !wal_path.exists(),
             "WAL must be deleted after auto-checkpoint at threshold=2"
         );
-        // Crash: skip Drop checkpoint. Nothing is pending though — the
-        // auto-checkpoint above already flushed the WAL, so a normal drop
-        // here releases the kernel lock exactly as a real crash would, with
-        // nothing left to lose.
+        // Nothing is pending here — the auto-checkpoint above already
+        // flushed the WAL, so a normal drop releases the kernel lock
+        // exactly as a real crash would, with nothing left to lose.
     }
 
-    // No WAL after crash
+    // No WAL after close
     assert!(
         !wal_path.exists(),
-        "WAL must not exist after auto-checkpoint crash"
+        "WAL must not exist after auto-checkpoint close"
     );
 
     // Session 2: facts must be in main file (no WAL replay needed)
@@ -628,7 +627,7 @@ fn wal_recover_committed_tx_crash_before_checkpoint() {
 }
 
 #[test]
-fn wal_recover_rollback_crash() {
+fn wal_recover_rollback_not_persisted() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.graph");
     {
@@ -637,14 +636,14 @@ fn wal_recover_rollback_crash() {
         tx.execute(r#"(transact [[:e1 :name "Dave"]])"#).unwrap();
         tx.rollback();
         // Rollback discards pending facts before they are ever flushed to
-        // the WAL, so there is nothing here for a crash to lose. A normal
-        // drop releases the kernel lock exactly as process death would.
+        // the WAL, so a normal drop here releases the kernel lock with
+        // nothing left to recover on reopen.
     }
     let names = query_names(&db_path);
     assert_eq!(
         names.len(),
         0,
-        "rolled-back fact must not appear after crash"
+        "rolled-back fact must not appear after reopen"
     );
 }
 
