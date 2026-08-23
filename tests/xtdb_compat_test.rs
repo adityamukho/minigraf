@@ -77,8 +77,11 @@ fn xtdb_multi_attribute_join() {
     assert_eq!(active_admins, 1, "only e1 is an active admin");
 }
 
-/// XTDB concept: find entities related through a reference.
-/// Source: XTDB "Joins" — entity reference traversal.
+/// XTDB concept: find entities that share the same attribute value. The
+/// shared value here is a bare keyword (`:dept-eng`), not an entity
+/// reference (`Value::Ref(Uuid)`) — the join is on value equality, not on
+/// traversing a reference to another entity.
+/// Source: XTDB "Joins" — matching on shared attribute values.
 #[test]
 fn xtdb_entity_reference_join() {
     let db = Minigraf::in_memory().unwrap();
