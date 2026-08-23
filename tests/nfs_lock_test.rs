@@ -169,11 +169,11 @@ fn test_lock_is_exclusive_or_refused_over_nfsv3_without_lockd() {
     assert_lock_excludes_second_holder(&mount, "nfsv3-nolock");
 }
 
-/// On a mount where locking is unsupported, the default (`allow_unlocked =
-/// false`) must fail closed, and `open-unlocked` must proceed. Proves
-/// `allow_unlocked` is consulted only where it should be.
+/// `open-unlocked` must succeed regardless of what the mount's locking
+/// support turns out to be — it is documented as accepting that risk
+/// unconditionally, so this holds on the `nolock` mount too.
 #[test]
-fn test_allow_unlocked_gates_the_unsupported_nfsv3_mount() {
+fn test_open_unlocked_mode_succeeds_on_the_unsupported_nfsv3_mount() {
     let Some(mount) = nfsv3_nolock_dir() else {
         eprintln!("SKIP: MINIGRAF_NFS_TEST_DIR_V3_NOLOCK not set");
         return;
@@ -181,23 +181,48 @@ fn test_allow_unlocked_gates_the_unsupported_nfsv3_mount() {
     let helper = helper_binary();
     require_helper_built(&helper);
 
-    let db = mount.join("allow-unlocked-gate.graph");
-
-    let default_open = run_helper(&helper, &db, "open");
-    let default_out = String::from_utf8_lossy(&default_open.stdout);
-    assert!(
-        !default_out.contains("OPEN_OK"),
-        "default open must fail closed on a mount that cannot lock.\n\
-         stdout: {default_out}"
-    );
-
-    let db2 = mount.join("allow-unlocked-gate-2.graph");
-    let unlocked_open = run_helper(&helper, &db2, "open-unlocked");
+    let db = mount.join("open-unlocked-nolock.graph");
+    let unlocked_open = run_helper(&helper, &db, "open-unlocked");
     let unlocked_out = String::from_utf8_lossy(&unlocked_open.stdout);
     assert!(
         unlocked_out.contains("OPEN_OK"),
         "open-unlocked must proceed on a mount that cannot lock.\n\
          stdout: {unlocked_out}\nstderr: {}",
         String::from_utf8_lossy(&unlocked_open.stderr)
+    );
+}
+
+/// #334: `-o nolock` is a known, permanent gap in lock detection, not a bug
+/// to fix here. This test documents the actual (surprising) behavior rather
+/// than the behavior a naive reading of `allow_unlocked` would predict.
+///
+/// A `nolock` mount tells the Linux NFS client to serve `flock`/OFD locks
+/// out of its own local lock table instead of going over NLM to the server.
+/// `File::try_lock` sees a normal local success and returns `Ok(())` —
+/// indistinguishable, from inside `classify()` in `src/storage/backend/
+/// file.rs`, from a mount where locking genuinely works. So the default
+/// (`allow_unlocked = false`) open does NOT fail closed here, even though
+/// this mount cannot actually coordinate locks across separate client
+/// hosts. `allow_unlocked` is never consulted because the code never
+/// learns the mount can't really lock; see docs/ERROR_REFERENCE.md
+/// STG-027 for the operator-facing writeup of why this mode is
+/// unsupported rather than detected and rejected.
+#[test]
+fn test_default_open_is_not_detected_as_unsupported_on_the_nolock_mount() {
+    let Some(mount) = nfsv3_nolock_dir() else {
+        eprintln!("SKIP: MINIGRAF_NFS_TEST_DIR_V3_NOLOCK not set");
+        return;
+    };
+    let helper = helper_binary();
+    require_helper_built(&helper);
+
+    let db = mount.join("default-open-nolock.graph");
+    let default_open = run_helper(&helper, &db, "open");
+    let default_out = String::from_utf8_lossy(&default_open.stdout);
+    assert!(
+        default_out.contains("OPEN_OK"),
+        "default open is expected to succeed on a `nolock` mount — this is \
+         the known, undetectable gap tracked by #334, not a regression.\n\
+         stdout: {default_out}"
     );
 }

@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`open()` now fails on filesystems that cannot lock at all** rather than
   proceeding unprotected. Set `OpenOptions::allow_unlocked(true)` to accept the
   risk on single-writer deployments.
+- **This detection does not cover NFSv3 exports mounted with `-o nolock`**
+  (#334). Linux's NFS client serves `flock`/OFD locks for a `nolock` mount out
+  of its own local, in-kernel lock table instead of contacting the server, so
+  `try_lock` reports an ordinary local success and looks identical to a mount
+  where locking genuinely works — `allow_unlocked` is never consulted because
+  the code never learns the mount can't really lock. Two separate client hosts
+  writing the same `nolock` export can each believe they hold the lock with no
+  cross-host coordination. There is no way to detect this from the lock call's
+  result, so `nolock` NFSv3 exports are an unsupported deployment for
+  multi-writer use — the same category as running mixed Minigraf versions
+  against one file, below. See `docs/ERROR_REFERENCE.md` STG-027.
 - **A database genuinely locked by another process now reports its error
   later than before** — about 375ms later. `FileBackend::open_with` retries a
   cross-process `WouldBlock` up to 10 times with backoff doubling from 5ms and
