@@ -105,6 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Keywords may contain `?`**: `:person/alive?` now lexes as a single keyword. Previously `?` terminated the keyword, so `[:e :alive? true]` lexed as `:alive` followed by a stray `?` symbol and was rejected as a four-element fact — reporting `Optional 4th element of a fact must be a map`, which named the value rather than the keyword. `?` is a constituent character in EDN keywords and predicate-style names (`:artist/dead?`) are idiomatic. Query variables are unaffected: a `?` not preceded by `:` still begins a symbol. `tests/grammar/grammar.pest` updated to match.
 
+### Performance
+
+- **`BrowserDb` no longer allocates a redundant LRU page cache** (#275): `open_in_memory()`, `open()`, and `import_graph()` now pass page cache capacity `0` to `PersistentFactStorage::new` instead of `256`. The backing `BrowserBufferBackend` is already a `HashMap`-resident, fully-loaded page store, so every `PageCache` hit was a second RAM-to-RAM copy plus LRU bookkeeping for no benefit.
+
+  This required fixing `PageCache` itself: capacity `0` previously meant *unbounded* (the eviction loop's `capacity > 0` guard skipped eviction but insertion still ran unconditionally), which would have made this change strictly worse — an ever-growing duplicate of every page ever read, never reclaimed. `PageCache::new(0)` now means the cache is disabled outright: `get_or_load` always reads through to the backend and `put_dirty` is a no-op. No existing caller passed `0` before this change, so no other behaviour is affected.
+
 ## v1.2.3 — 2026-08-10
 
 No changes to the core crate. Released so the language bindings have a version
