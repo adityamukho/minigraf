@@ -17,6 +17,19 @@ enum LockOutcome {
     Held,
     /// The filesystem cannot lock, and the caller did not opt in to running
     /// without one.
+    ///
+    /// This branch is reachable only when the OS itself reports the lock
+    /// call as unsupported (e.g. some FUSE mounts, or NFSv3 with `lockd`
+    /// simply not running). It is NOT reachable on an NFSv3 export mounted
+    /// with the explicit `nolock` option: there, the Linux NFS client
+    /// serves `flock`/OFD locks out of its own local, in-kernel lock table
+    /// instead of going over NLM to the server, so `try_lock` sees an
+    /// ordinary local success and this crate cannot tell that mount apart
+    /// from one where locking genuinely works. `allow_unlocked` is never
+    /// consulted in that case, because `classify` never learns the mount
+    /// can't really coordinate locks across hosts. `nolock` NFSv3 exports
+    /// are an unsupported deployment for this reason — see #334 and
+    /// docs/ERROR_REFERENCE.md STG-027.
     Unsupported(std::io::Error),
     /// The filesystem cannot lock and the caller accepted the risk.
     ProceedUnlocked,

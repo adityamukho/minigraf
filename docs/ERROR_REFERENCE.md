@@ -1836,6 +1836,8 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 **Scenario**: A `.graph` file placed on an NFSv3 export whose `lockd` is not running.
 
+**NFSv3 `nolock` is not covered by this error — it is a silent, undetectable gap (#334).** An export explicitly mounted with `-o nolock` behaves differently from plain "no `lockd`": the Linux NFS client serves `flock`/OFD locks out of its own local, in-kernel lock table instead of going over NLM to the server. `try_lock` sees an ordinary local success, `classify` takes the same branch it would on a filesystem where locking genuinely works, and this error is never raised — `allow_unlocked` is never consulted because the code never learns the mount can't really lock. Two separate client hosts writing the same `nolock` export each get a false `Ok(())` from their own kernel with zero cross-host coordination, and can silently corrupt the file. There is no way to detect this from inside `try_lock`'s result, so `nolock` NFSv3 exports are an unsupported deployment for multi-writer use, the same way running mixed Minigraf versions against one file is unsupported (see the kernel-locking CHANGELOG entry) — avoid `nolock` exports rather than relying on this check to catch them.
+
 ---
 
 ## WAL — Write-Ahead Log Errors

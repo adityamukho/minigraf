@@ -40,12 +40,17 @@ jobs:
           sudo exportfs -ra
           sudo systemctl restart nfs-kernel-server
 
-      - name: Mount the export as NFSv4 and as NFSv3 without lockd
+      # NFSv3 mounted with `-o nolock` is deliberately not provisioned here.
+      # #334 found that mode is invisible to Minigraf's lock detection: the
+      # Linux NFS client serves locks out of its own local, in-kernel lock
+      # table instead of over NLM, so `try_lock` always reports success and
+      # there is nothing for this suite to gate on. It is documented as an
+      # unsupported deployment instead — see docs/ERROR_REFERENCE.md STG-027.
+      - name: Mount the export as NFSv4
         run: |
-          sudo mkdir -p /mnt/nfs-v4 /mnt/nfs-v3-nolock
+          sudo mkdir -p /mnt/nfs-v4
           sudo mount -t nfs -o vers=4,proto=tcp 127.0.0.1:/srv/nfs/export /mnt/nfs-v4
-          sudo mount -t nfs -o vers=3,nolock 127.0.0.1:/srv/nfs/export /mnt/nfs-v3-nolock
-          sudo chown "$(id -u)":"$(id -g)" /mnt/nfs-v4 /mnt/nfs-v3-nolock
+          sudo chown "$(id -u)":"$(id -g)" /mnt/nfs-v4
 
       - name: Build the PID-namespace helper binary
         run: cargo build --examples
@@ -54,7 +59,6 @@ jobs:
         shell: bash
         env:
           MINIGRAF_NFS_TEST_DIR_V4: /mnt/nfs-v4
-          MINIGRAF_NFS_TEST_DIR_V3_NOLOCK: /mnt/nfs-v3-nolock
           RUST_BACKTRACE: 1
         run: |
           set -o pipefail
@@ -73,8 +77,8 @@ jobs:
             echo
             echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "- Commit: $GITHUB_SHA"
-            echo "- Reproduce: needs a loopback NFS export mounted as vers=4 and as"
-            echo "  vers=3,nolock; see the \"nfs\" job in .github/workflows/nfs-lock.yml"
+            echo "- Reproduce: needs a loopback NFS export mounted as vers=4; see"
+            echo "  the \"nfs\" job in .github/workflows/nfs-lock.yml"
             echo
             echo "## Test output"
             echo
