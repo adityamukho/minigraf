@@ -23,6 +23,13 @@ jobs:
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin
 
+      - name: Build example binaries used by lock tests
+        # tarpaulin does not build `examples/` before running tests, unlike
+        # plain `cargo test`. tests/nfs_lock_test.rs and
+        # tests/docker_lock_test.rs resolve examples/pid_ns_helper relative
+        # to the test binary's own target dir, so it must already be built.
+        run: cargo build --examples
+
       - name: Generate coverage
         run: cargo tarpaulin --out Xml --timeout 300 --fail-under 75 --exclude-files "src/main.rs"
 
