@@ -14,10 +14,19 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// Path to `examples/pid_ns_helper`, resolved relative to the test binary at
-/// `target/debug/deps/nfs_lock_test-<hash>`. Shared shape with
+/// Path to `examples/pid_ns_helper`.
+///
+/// `MINIGRAF_PID_NS_HELPER`, if set, is used as-is. Needed under `cargo
+/// tarpaulin`, which deletes `target/debug/examples/` as part of its own
+/// instrumented build regardless of when it was built, so the helper has to
+/// live in a target dir tarpaulin never touches; `.github/workflows/coverage.yml`
+/// builds it there and sets this variable. Otherwise resolved relative to the
+/// test binary at `target/debug/deps/nfs_lock_test-<hash>`, the same shape as
 /// `tests/pid_namespace_test.rs::helper_binary`.
 fn helper_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("MINIGRAF_PID_NS_HELPER") {
+        return PathBuf::from(path);
+    }
     let mut dir = std::env::current_exe().expect("test binary path");
     dir.pop(); // deps/
     dir.pop(); // debug/
