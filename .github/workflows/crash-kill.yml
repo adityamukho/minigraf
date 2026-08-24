@@ -1,10 +1,14 @@
 name: SIGKILL crash-safety fuzz (nightly)
 
-# #308: a real SIGKILL landing mid-checkpoint had a ~26% chance of leaving
+# #308: an abrupt kill landing mid-checkpoint had a ~26% chance of leaving
 # the header on disk with a bumped page_count but a stale checksum --
-# permanent corruption with no recovery path. tests/crash_kill_test.rs runs
-# a small smoke count in the per-PR suite (rust.yml); this workflow runs a
-# much larger round count nightly for statistical confidence.
+# permanent corruption with no recovery path. The bug was in the ordering
+# of our own synchronous write calls, not any OS-specific durability
+# boundary, so it affected every platform equally; this runs the full
+# matrix rather than Linux only. tests/crash_kill_test.rs runs a small
+# smoke count in the per-PR suite (rust.yml, already cross-platform); this
+# workflow runs a much larger round count nightly for statistical
+# confidence on each OS.
 
 on:
   schedule:
@@ -18,7 +22,11 @@ permissions:
 jobs:
   crash-kill:
     name: SIGKILL fuzz suite
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     steps:
@@ -41,11 +49,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_TITLE: "Nightly SIGKILL crash-safety failure"
+          ISSUE_TITLE: "Nightly SIGKILL crash-safety failure (${{ matrix.os }})"
         run: |
           report_file="crash-kill-failure.md"
           {
-            echo "The nightly SIGKILL crash-safety fuzz suite failed."
+            echo "The nightly SIGKILL crash-safety fuzz suite failed on ${{ matrix.os }}."
             echo
             echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "- Commit: $GITHUB_SHA"
@@ -65,7 +73,7 @@ jobs:
             --search "$ISSUE_TITLE in:title" \
             --json number,title \
             --limit 100 \
-            --jq '.[] | select(.title == "Nightly SIGKILL crash-safety failure") | .number' \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
             | head -n 1)"
 
           if [ -n "$existing_issue" ]; then
