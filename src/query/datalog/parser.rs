@@ -499,7 +499,14 @@ impl Parser {
 pub fn parse_edn(input: &str) -> Result<EdnValue, String> {
     let tokens = tokenize(input)?;
     let mut parser = Parser::new(tokens);
-    parser.parse_value()
+    let value = parser.parse_value()?;
+    if let Some(token) = parser.peek() {
+        return Err(format!(
+            "unexpected trailing input after a complete form: {:?}",
+            token
+        ));
+    }
+    Ok(value)
 }
 
 /// Parse a Datalog command from EDN
@@ -733,6 +740,13 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     // Parse (query [:find ?x ?y :as-of N :valid-at "ts" :where [patterns...]])
     if elements.is_empty() {
         return Err("Query requires a map argument".to_string());
+    }
+
+    if elements.len() > 1 {
+        return Err(format!(
+            "query takes (query [...]); found {} unexpected trailing argument(s)",
+            elements.len() - 1
+        ));
     }
 
     // SAFETY: is_empty() check above guarantees index 0 exists
@@ -1836,6 +1850,13 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
         return Err("Rule must have a body".to_string());
     }
 
+    if elements.len() > 1 {
+        return Err(format!(
+            "rule takes (rule [...]); found {} unexpected trailing argument(s)",
+            elements.len() - 1
+        ));
+    }
+
     // Parse the rule body (single vector containing head + body patterns)
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
@@ -2601,6 +2622,74 @@ mod tests {
         let msg = result.unwrap_err();
         assert!(
             msg.contains(":max-results must be a positive integer"),
+            "wrong error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_edn_rejects_trailing_tokens_after_complete_form() {
+        // A syntactically complete top-level form followed by garbage tokens
+        // must be a hard error, not silently truncated parsing (#305).
+        let result = parse_edn("[1 2 3] garbage-trailing-tokens ) ] } 12345");
+        assert!(
+            result.is_err(),
+            "trailing tokens after a complete form must be rejected"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing input"),
+            "wrong error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_datalog_command_rejects_trailing_tokens_after_complete_form() {
+        let result = parse_datalog_command(
+            r#"(query [:find ?e :where [?e :entity-type :type/commit]]) garbage-trailing-tokens ) ] } 12345"#,
+        );
+        assert!(
+            result.is_err(),
+            "trailing tokens after a complete command must be rejected"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing input"),
+            "wrong error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_query_rejects_extra_argument_after_vector() {
+        // :max-results must be a keyword INSIDE the query vector; putting it
+        // after the vector as a sibling argument must not be silently dropped (#305).
+        let result =
+            parse_datalog_command(r#"(query [:find ?e :where [?e :a :b]] :max-results 5)"#);
+        assert!(
+            result.is_err(),
+            "extra trailing argument to query must be rejected, not silently ignored"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing argument"),
+            "wrong error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_rule_rejects_extra_argument_after_vector() {
+        let result =
+            parse_datalog_command(r#"(rule [(reachable ?a ?b) [?a :edge ?b]] :unexpected-extra)"#);
+        assert!(
+            result.is_err(),
+            "extra trailing argument to rule must be rejected, not silently ignored"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing argument"),
             "wrong error: {}",
             msg
         );
