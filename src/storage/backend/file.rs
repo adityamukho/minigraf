@@ -492,12 +492,12 @@ mod tests {
         let page_data = vec![0xABu8; PAGE_SIZE];
         backend.write_page(5, &page_data).unwrap();
 
-        let raw = std::fs::read(&path).unwrap();
-        let on_disk = FileHeader::from_bytes(
-            raw.get(..PAGE_SIZE)
-                .expect("file must be at least one page"),
-        )
-        .unwrap();
+        // Read back through the same handle rather than opening the path
+        // independently: `backend` still holds the file lock, and Windows
+        // (unlike Unix) refuses a second, unrelated open of a locked file
+        // even from the same process.
+        let raw = backend.read_page(0).unwrap();
+        let on_disk = FileHeader::from_bytes(&raw).unwrap();
         let computed = crate::storage::persistent_facts::compute_header_checksum(&on_disk);
         assert_eq!(
             on_disk.header_checksum, computed,
