@@ -113,6 +113,30 @@ fn nfsv3_nolock_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// #343: the first lock ever taken on a freshly mounted loopback NFSv4
+/// export can stall for tens of seconds (observed ~57s locally, in line with
+/// the mount's default 60s RPC timeout) before the kernel even attempts the
+/// lock -- almost certainly one-time NFSv4 lock-state/callback-channel setup
+/// between this host acting as both client and server. That stall lands on
+/// whichever process asks first, so it hits the holder spawned below and the
+/// second opener at nearly the same moment, erasing the head start the
+/// holder would otherwise have (it creates the database and calls
+/// `try_lock` on the very next line) and turning "holder always wins" into a
+/// coin flip. Paying that cost here, before the timed race, keeps it out of
+/// the assertion below. Confirmed locally: back-to-back lock cycles on one
+/// mount pay the stall only once; every cycle after is exclusive and
+/// effectively instant.
+fn warm_up_locking(mount: &Path, helper: &Path) {
+    let db = mount.join("warmup.graph");
+    let out = run_helper(helper, &db, "open");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("OPEN_OK"),
+        "[warm-up] open failed on {}; cannot proceed to the timed race.\nstderr: {}",
+        mount.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// While a holder is alive on the mount, a second open must never report
 /// success. This is the core #324 assertion: genuinely exclusive, or
 /// refused — a silent no-op (both processes believing they hold the lock) is
@@ -120,6 +144,7 @@ fn nfsv3_nolock_dir() -> Option<PathBuf> {
 fn assert_lock_excludes_second_holder(mount: &Path, label: &str) {
     let helper = helper_binary();
     require_helper_built(&helper);
+    warm_up_locking(mount, &helper);
 
     let db = mount.join(format!("{label}.graph"));
     let release = mount.join(format!("{label}-release"));
