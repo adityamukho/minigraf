@@ -62,6 +62,33 @@ fn validate_wal_header(file: &mut File) -> Result<()> {
     Ok(())
 }
 
+/// Whether an existing WAL file's header is intact, or too short to
+/// contain one at all.
+enum WalHeaderState {
+    /// At least `WAL_HEADER_SIZE` bytes present; validated by
+    /// `validate_wal_header` (magic/version checked separately).
+    Present,
+    /// Fewer than `WAL_HEADER_SIZE` bytes on disk. This can only happen
+    /// from a crash between `create_new` and `write_wal_header` completing
+    /// in `WalWriter::open_or_create` -- before any `WalWriter` existed to
+    /// append an entry with. Safe to treat as an empty WAL (#308-class
+    /// fix: the same "kill mid multi-step file write" window that
+    /// corrupted the main `.graph` header applies here to the WAL sidecar).
+    Absent,
+}
+
+/// Distinguishes a too-short WAL file from one long enough to validate.
+/// Does not itself validate magic/version -- callers still run
+/// `validate_wal_header` on the `Present` case.
+fn check_wal_header_length(file: &mut File) -> Result<WalHeaderState> {
+    let len = file.metadata()?.len();
+    if len < WAL_HEADER_SIZE as u64 {
+        Ok(WalHeaderState::Absent)
+    } else {
+        Ok(WalHeaderState::Present)
+    }
+}
+
 // ─── Entry serialization ────────────────────────────────────────────────────
 
 fn serialize_entry(tx_count: u64, facts: &[Fact]) -> Result<Vec<u8>> {
@@ -141,7 +168,13 @@ impl WalWriter {
 
         // File exists — validate its header and seek to end for appending
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-        validate_wal_header(&mut file)?;
+        match check_wal_header_length(&mut file)? {
+            WalHeaderState::Present => validate_wal_header(&mut file)?,
+            // A previous crash landed between this file's creation and its
+            // header write completing; no entry could have been appended
+            // yet, so re-initialize it as a fresh, empty WAL.
+            WalHeaderState::Absent => write_wal_header(&mut file)?,
+        }
         file.seek(SeekFrom::End(0))?;
         Ok(WalWriter { file })
     }
@@ -197,7 +230,16 @@ impl WalReader {
     /// Open the WAL at `path` for reading.
     pub fn open(path: &Path) -> Result<Self> {
         let mut file = File::open(path)?;
-        validate_wal_header(&mut file)?;
+        match check_wal_header_length(&mut file)? {
+            WalHeaderState::Present => validate_wal_header(&mut file)?,
+            // Too short to contain a header, which can only mean a crash
+            // landed before any entry was ever appended (see
+            // `WalHeaderState::Absent`). `read_entries` already treats
+            // hitting EOF while reading an entry as "no more entries", so
+            // leaving the file as-is and letting that seek-past-end happen
+            // naturally is correct -- there is nothing here to replay.
+            WalHeaderState::Absent => {}
+        }
         Ok(WalReader { file })
     }
 
@@ -462,6 +504,63 @@ mod tests {
 
         let result = WalReader::open(&path);
         assert!(result.is_err(), "bad magic should be rejected");
+    }
+
+    /// #308-class fix: a crash between `create_new` and the header write
+    /// finishing in `open_or_create` leaves a WAL file shorter than
+    /// `WAL_HEADER_SIZE`. No entry could ever have been appended at that
+    /// point (that requires a fully-open `WalWriter`), so this must be
+    /// treated as an empty WAL rather than a hard read error.
+    #[test]
+    fn test_wal_reader_tolerates_header_shorter_than_wal_header_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("short.wal");
+
+        // Simulates a kill mid-write_wal_header: only the magic made it out.
+        std::fs::write(&path, b"MWAL").unwrap();
+
+        let mut reader = WalReader::open(&path).unwrap();
+        let entries = reader.read_entries().unwrap();
+        assert!(
+            entries.is_empty(),
+            "a too-short WAL header must read back as empty, not error"
+        );
+    }
+
+    /// As above, but for the writer side: re-opening a WAL left too short
+    /// by a prior crash must re-initialize it with a fresh header instead
+    /// of failing `open_or_create`, and the WAL must be fully usable
+    /// afterward.
+    #[test]
+    fn test_wal_writer_reinitializes_header_shorter_than_wal_header_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("short.wal");
+
+        std::fs::write(&path, b"MW").unwrap();
+
+        let mut writer = WalWriter::open_or_create(&path).unwrap();
+        let alice = Uuid::new_v4();
+        let fact = make_fact(alice, ":name", Value::String("Alice".to_string()), 1);
+        writer.append_entry(1, std::slice::from_ref(&fact)).unwrap();
+        drop(writer);
+
+        let mut reader = WalReader::open(&path).unwrap();
+        let entries = reader.read_entries().unwrap();
+        assert_eq!(entries.len(), 1, "re-initialized WAL must accept entries");
+    }
+
+    /// A completely empty (0-byte) WAL file -- the earliest possible point
+    /// in the crash window, right after `create_new` -- must be tolerated
+    /// the same way.
+    #[test]
+    fn test_wal_reader_tolerates_zero_byte_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.wal");
+        std::fs::write(&path, []).unwrap();
+
+        let mut reader = WalReader::open(&path).unwrap();
+        let entries = reader.read_entries().unwrap();
+        assert!(entries.is_empty(), "a 0-byte WAL must read back as empty");
     }
 
     #[test]
