@@ -1,6 +1,8 @@
 //! Integration tests for Phase 7.3: or / or-join disjunction.
 
-use minigraf::{Minigraf, OpenOptions, QueryResult};
+use minigraf::{Minigraf, OpenOptions, QueryResult, Value};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn db() -> Minigraf {
     OpenOptions::new().open_memory().unwrap()
@@ -377,5 +379,211 @@ fn test_or_join_does_not_return_duplicate_bindings() {
         result_count(&r),
         1,
         "or-join entity matching both branches must appear exactly once"
+    );
+}
+
+// ── Issue #250: short-circuit or/or-join branch evaluation ─────────────────
+
+/// (19) or-join short-circuit is always safe (branches are projected to outer_keys
+/// before merging, so a branch can't smuggle in a new distinguishing variable):
+/// once the cheap branch covers every incoming join-var key, the expensive branch
+/// (guarded by a call-counting predicate) must never run.
+#[test]
+fn test_or_join_short_circuits_expensive_branch_when_fully_covered() {
+    let db = db();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_inner = calls.clone();
+    db.register_predicate("expensive?", move |_v: &Value| {
+        calls_inner.fetch_add(1, Ordering::SeqCst);
+        true
+    })
+    .unwrap();
+
+    // e1 also has :flag true — if the expensive branch actually ran (i.e. the
+    // short-circuit didn't fire), it would match e1 and invoke the counter, even
+    // though e1 is already covered by the cheap branch. Without this overlap, the
+    // expensive branch's own pattern would match nothing regardless of whether it
+    // runs, and the `calls == 0` assertion below would pass vacuously.
+    db.execute(
+        r#"(transact [[:e1 :cheap true] [:e1 :flag true] [:e2 :cheap true] [:e3 :cheap true]])"#,
+    )
+    .unwrap();
+
+    let r = db
+        .execute(
+            r#"(query [:find ?e
+                    :where [?e ?_a ?_v]
+                           (or-join [?e]
+                             [?e :cheap true]
+                             (and [?e :flag true] [(expensive? ?e)]))])"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result_count(&r),
+        3,
+        "all three entities match via the cheap branch alone"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "expensive branch must be skipped once the cheap branch covers every group"
+    );
+}
+
+/// (20) or-join correctness when the cheap branch covers only some incoming keys:
+/// the fallback branch must still run for the uncovered ones, and results must
+/// include matches contributed by it.
+#[test]
+fn test_or_join_falls_back_to_expensive_branch_when_not_fully_covered() {
+    let db = db();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_inner = calls.clone();
+    db.register_predicate("expensive?", move |_v: &Value| {
+        calls_inner.fetch_add(1, Ordering::SeqCst);
+        true
+    })
+    .unwrap();
+
+    db.execute(r#"(transact [[:e1 :cheap true] [:e2 :flag true]])"#)
+        .unwrap();
+
+    let r = db
+        .execute(
+            r#"(query [:find ?e
+                    :where [?e ?_a ?_v]
+                           (or-join [?e]
+                             [?e :cheap true]
+                             (and [?e :flag true] [(expensive? ?e)]))])"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result_count(&r),
+        2,
+        "e1 via the cheap branch, e2 via the fallback branch"
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) >= 1,
+        "fallback branch must run for the group the cheap branch didn't cover"
+    );
+}
+
+/// (20b) Proves branch reordering itself (not declaration order) drives the skip:
+/// the expensive branch is declared FIRST, but has a genuinely higher `branch_cost`
+/// (a 1-bound pattern, cost 100) than the cheap branch (which pairs a 2-bound
+/// pattern with an unrelated fully-bound one, so `branch_cost`'s min-over-patterns
+/// is 1). If `branch_cost`-based sorting were broken (e.g. reverted to declaration
+/// order), the expensive branch — written first — would run before coverage is
+/// established and invoke the counter.
+#[test]
+fn test_or_join_short_circuit_relies_on_cost_sort_not_declaration_order() {
+    let db = db();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_inner = calls.clone();
+    db.register_predicate("expensive?", move |_v: &Value| {
+        calls_inner.fetch_add(1, Ordering::SeqCst);
+        true
+    })
+    .unwrap();
+
+    // :tracked seeds exactly {e1, e2, e3} as the incoming set — deliberately not
+    // `[?e ?_a ?_v]`, which would also pull in :marker-ent (it has its own fact)
+    // and produce two incoming rows for e1 (one per fact), muddying the coverage
+    // check this test is actually after.
+    db.execute(
+        r#"(transact [
+            [:e1 :tracked true] [:e1 :cheap true] [:e1 :flag true]
+            [:e2 :tracked true] [:e2 :cheap true]
+            [:e3 :tracked true] [:e3 :cheap true]
+            [:marker-ent :m true]
+        ])"#,
+    )
+    .unwrap();
+
+    let r = db
+        .execute(
+            r#"(query [:find ?e
+                    :where [?e :tracked true]
+                           (or-join [?e]
+                             (and [?e ?attr true] [(expensive? ?e)])
+                             (and [?e :cheap true] [:marker-ent :m true]))])"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result_count(&r),
+        3,
+        "all three entities match via the cost-cheaper branch alone"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "the cost-100 branch must be sorted after the cost-1 branch and then skipped, \
+         even though it appears first in the query text"
+    );
+}
+
+/// (21) Plain `or` short-circuits too, when it's a pure filter (no branch introduces
+/// a variable beyond what's already bound in the incoming scope).
+#[test]
+fn test_or_short_circuits_pure_filter_when_fully_covered() {
+    let db = db();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_inner = calls.clone();
+    db.register_predicate("expensive?", move |_v: &Value| {
+        calls_inner.fetch_add(1, Ordering::SeqCst);
+        true
+    })
+    .unwrap();
+
+    db.execute(r#"(transact [[:e1 :status :active] [:e2 :status :active] [:e3 :flag true]])"#)
+        .unwrap();
+
+    let r = db
+        .execute(
+            r#"(query [:find ?e
+                    :where [?e :status ?_s]
+                           (or [?e :status :active]
+                               (and [?e :flag true] [(expensive? ?e)]))])"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result_count(&r),
+        2,
+        "e1 and e2 both match via the cheap branch alone"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "expensive branch must be skipped once the cheap branch covers every incoming entity"
+    );
+}
+
+/// (22) Correctness guard: a plain `or` whose branches introduce a *new* variable
+/// must never short-circuit, even if every incoming key is already "covered" by the
+/// cheaper branch — a later branch can legitimately bind that new variable to a
+/// different value for the same shared key, and dropping it would silently lose a
+/// valid result row. This is the scenario that makes `or` (unlike `or-join`) unsafe
+/// to skip on coverage alone.
+#[test]
+fn test_or_never_skips_branches_that_introduce_new_variables() {
+    let db = db();
+    db.execute(r#"(transact [[:e1 :id true] [:e1 :typeA :va] [:e1 :typeB :vb]])"#)
+        .unwrap();
+
+    let r = db
+        .execute(
+            r#"(query [:find ?e ?v
+                    :where [?e :id true]
+                           (or [?e :typeA ?v] [?e :typeB ?v])])"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result_count(&r),
+        2,
+        "both branches must contribute a row for ?e=:e1, since ?v differs between them"
     );
 }

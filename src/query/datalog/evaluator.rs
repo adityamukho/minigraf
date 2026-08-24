@@ -808,7 +808,9 @@ impl StratifiedEvaluator {
                 let matcher = PatternMatcher::from_slice(accumulated_facts.clone());
 
                 // Plan: assigns index hints + pushes Expr to earliest binding position.
-                let planned = crate::query::datalog::optimizer::plan(
+                // Not/NotJoin are excluded from plan_clauses above, so `deferred` is
+                // always empty here — rule bodies keep their existing not-filter path.
+                let (planned, _deferred) = crate::query::datalog::optimizer::plan(
                     plan_clauses,
                     &crate::storage::index::Indexes::new(),
                 );

@@ -517,18 +517,27 @@ impl DatalogExecutor {
             }
         }
 
-        // Collect Pattern and Expr top-level clauses for the planner.
-        // Not/NotJoin/Or/OrJoin are extracted separately below and applied as post-filters.
+        // Collect Pattern, Expr, Not, and NotJoin top-level clauses for the planner.
+        // Or/OrJoin are extracted separately below and applied as a post-pass.
         let plan_clauses: Vec<WhereClause> = query
             .where_clauses
             .iter()
-            .filter(|c| matches!(c, WhereClause::Pattern(_) | WhereClause::Expr { .. }))
+            .filter(|c| {
+                matches!(
+                    c,
+                    WhereClause::Pattern(_)
+                        | WhereClause::Expr { .. }
+                        | WhereClause::Not(_)
+                        | WhereClause::NotJoin { .. }
+                )
+            })
             .cloned()
             .collect();
 
-        let planned = optimizer::plan(plan_clauses, &self.indexes);
+        let (planned, deferred_not_clauses) = optimizer::plan(plan_clauses, &self.indexes);
 
-        // Process planned clauses in order: Pattern → expand bindings, Expr → filter/extend.
+        // Process planned clauses in order: Pattern → expand bindings, Expr → filter/extend,
+        // Not/NotJoin → shrink bindings as soon as their variables are bound (#248).
         let mut bindings: Vec<Binding> = vec![Binding::new()];
         for (clause, hint) in planned {
             match clause {
@@ -557,16 +566,35 @@ impl DatalogExecutor {
                         })
                         .collect();
                 }
+                WhereClause::Not(body) => {
+                    bindings = apply_not_clause(
+                        bindings,
+                        &body,
+                        filtered_facts.clone(),
+                        valid_at_value.clone(),
+                        &registry,
+                    );
+                }
+                WhereClause::NotJoin { join_vars, clauses } => {
+                    bindings = apply_not_join_clause(
+                        bindings,
+                        &join_vars,
+                        &clauses,
+                        filtered_facts.clone(),
+                        valid_at_value.clone(),
+                        &registry,
+                    );
+                }
                 _ => {}
             }
         }
 
-        // Apply Or/OrJoin clauses (post-pass: after pattern matching, before not/expr)
+        // Apply Or/OrJoin clauses (post-pass: after pattern matching, before deferred not/expr)
         let rules_guard = self
             .rules
             .read()
             .map_err(|_| anyhow!("rules lock poisoned"))?;
-        let bindings = apply_or_clauses(
+        let mut bindings = apply_or_clauses(
             &query.where_clauses,
             bindings,
             filtered_facts.clone(),
@@ -577,308 +605,35 @@ impl DatalogExecutor {
         )?;
         drop(rules_guard);
 
-        // Apply not-filter for WhereClause::Not and WhereClause::NotJoin clauses
-        // (no rules involved — pure post-filter)
+        // Apply Not/NotJoin clauses the planner couldn't place inline (#248) — their
+        // variables are only bound by the Or/OrJoin pass above, so they must run here,
+        // after it. Sorted cheapest-first, same as the pre-#248 post-filter ordering.
         #[cfg_attr(feature = "wasm", allow(unused_mut))]
-        let mut not_clauses: Vec<&Vec<WhereClause>> = query
-            .where_clauses
-            .iter()
-            .filter_map(|c| match c {
-                WhereClause::Not(inner) => Some(inner),
-                _ => None,
-            })
-            .collect();
-
-        #[cfg_attr(feature = "wasm", allow(unused_mut))]
-        let mut not_join_clauses: Vec<(Vec<String>, Vec<WhereClause>)> = query
-            .where_clauses
-            .iter()
-            .filter_map(|c| match c {
-                WhereClause::NotJoin { join_vars, clauses } => {
-                    Some((join_vars.clone(), clauses.clone()))
-                }
-                _ => None,
-            })
-            .collect();
-
-        // WASM omission: small datasets + determinism — see optimizer::selectivity_score().
+        let mut deferred_not_clauses = deferred_not_clauses;
         #[cfg(not(feature = "wasm"))]
-        not_clauses.sort_by_key(|body| optimizer::clause_cost(&WhereClause::Not(body.to_vec())));
-        // WASM omission: small datasets + determinism — see optimizer::selectivity_score().
-        #[cfg(not(feature = "wasm"))]
-        not_join_clauses.sort_by_key(|(vars, clauses)| {
-            optimizer::clause_cost(&WhereClause::NotJoin {
-                join_vars: vars.clone(),
-                clauses: clauses.clone(),
-            })
-        });
+        deferred_not_clauses.sort_by_key(optimizer::clause_cost);
+        for clause in deferred_not_clauses {
+            bindings = match clause {
+                WhereClause::Not(body) => apply_not_clause(
+                    bindings,
+                    &body,
+                    filtered_facts.clone(),
+                    valid_at_value.clone(),
+                    &registry,
+                ),
+                WhereClause::NotJoin { join_vars, clauses } => apply_not_join_clause(
+                    bindings,
+                    &join_vars,
+                    &clauses,
+                    filtered_facts.clone(),
+                    valid_at_value.clone(),
+                    &registry,
+                ),
+                _ => bindings,
+            };
+        }
 
-        let not_filtered: Vec<_> = if not_clauses.is_empty() && not_join_clauses.is_empty() {
-            bindings
-        } else {
-            // Pre-compute exclusion sets — one evaluation per not-body, not per outer binding.
-            //
-            // For each not-body, run pattern matching once against `filtered_facts` to get
-            // all bindings where the body is satisfiable. Then collect the "join keys" (the
-            // subset of variables that appear in the outer bindings) into a HashSet.
-            // The filter loop below does one O(1) probe per outer binding instead of a full
-            // pattern match.
-            //
-            // Edge case: expr-only bodies (no patterns) produce no pre-computed set and fall
-            // through to `not_body_matches` as before (rare, already fast).
-            use std::collections::HashSet;
-
-            // --- Not bodies ---
-            // Each element: either Some((has_expr, HashSet of excluded join-key tuples)) or None
-            // (expr-only, use slow path). `has_expr` is computed once here during pre-compute,
-            // not inside the per-binding filter closure.
-            let not_exclusion_sets: Vec<NotExclusionEntry> = not_clauses
-                .iter()
-                .map(|not_body| {
-                    let has_expr = not_body
-                        .iter()
-                        .any(|c| matches!(c, WhereClause::Expr { .. }));
-                    let patterns: Vec<_> = not_body
-                        .iter()
-                        .filter_map(|c| match c {
-                            WhereClause::Pattern(p) => Some(p.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    if patterns.is_empty() {
-                        // Expr-only body: no pre-computation possible.
-                        return None;
-                    }
-                    let matcher = PatternMatcher::from_slice_with_valid_at(
-                        filtered_facts.clone(),
-                        valid_at_value.clone(),
-                    );
-                    let body_bindings = matcher.match_patterns(&patterns);
-                    // Store all body bindings as sorted (key, value) vecs for probing.
-                    // Normalize values (e.g. keyword entities → Ref) so that probe keys from
-                    // the outer binding match body bindings regardless of representation.
-                    let exclusion_set: HashSet<Vec<(String, Value)>> = body_bindings
-                        .into_iter()
-                        .map(|mut b| {
-                            // Drop hidden metadata keys (prefixed `__f`)
-                            b.retain(|k, _| !k.starts_with("__f"));
-                            let mut kv: Vec<(String, Value)> = b
-                                .into_iter()
-                                .map(|(k, v)| (k, normalize_value(&v)))
-                                .collect();
-                            kv.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-                            kv
-                        })
-                        .collect();
-                    Some((has_expr, exclusion_set))
-                })
-                .collect();
-
-            // --- Not-join bodies ---
-            // Each entry: Some((has_expr, key_vars, HashSet)) where key_vars are the join_vars
-            // that actually appear in ALL body binding rows (the intersection of join_vars and
-            // vars bound in every row). This handles cases like `not-join [?u ?r]` where the
-            // body only binds `?r`.
-            //
-            // Values are normalized: Value::Keyword(k) that represents an entity keyword is
-            // converted to Value::Ref(uuid) so that probe keys from the outer binding (which
-            // may store entity references as keywords) match the body bindings (which bind
-            // entity fields as Value::Ref). `has_expr` is computed once here, not per-binding.
-            let not_join_exclusion_sets: Vec<NotJoinExclusionEntry> = not_join_clauses
-                .iter()
-                .map(|(join_vars, nj_clauses)| {
-                    let has_expr = nj_clauses
-                        .iter()
-                        .any(|c| matches!(c, WhereClause::Expr { .. }));
-                    let patterns: Vec<_> = nj_clauses
-                        .iter()
-                        .filter_map(|c| match c {
-                            WhereClause::Pattern(p) => Some(p.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    if patterns.is_empty() {
-                        return None;
-                    }
-                    let matcher = PatternMatcher::from_slice_with_valid_at(
-                        filtered_facts.clone(),
-                        valid_at_value.clone(),
-                    );
-                    let body_bindings = matcher.match_patterns(&patterns);
-                    if body_bindings.is_empty() {
-                        return Some((has_expr, join_vars.clone(), HashSet::new()));
-                    }
-                    let key_vars: Vec<String> = join_vars
-                        .iter()
-                        .filter(|v| body_bindings.iter().all(|b| b.contains_key(*v)))
-                        .cloned()
-                        .collect();
-                    let exclusion_set: HashSet<Vec<(String, Value)>> = body_bindings
-                        .into_iter()
-                        .map(|b| {
-                            let mut kv: Vec<(String, Value)> = key_vars
-                                .iter()
-                                .filter_map(|v| {
-                                    b.get(v).map(|val| (v.clone(), normalize_value(val)))
-                                })
-                                .collect();
-                            kv.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-                            kv
-                        })
-                        .collect();
-                    Some((has_expr, key_vars, exclusion_set))
-                })
-                .collect();
-
-            bindings
-                .into_iter()
-                .filter(|binding| {
-                    // Check not-bodies via pre-computed exclusion sets (fast path) or
-                    // via not_body_matches (slow path for expr-only bodies).
-                    for (not_body, exclusion_entry) in
-                        not_clauses.iter().zip(not_exclusion_sets.iter())
-                    {
-                        match exclusion_entry {
-                            Some((has_expr, exclusion_set)) => {
-                                if exclusion_set.is_empty() && !has_expr {
-                                    // No excluding bindings → this outer binding is safe.
-                                    continue;
-                                }
-                                if !has_expr {
-                                    // Fast path: probe exclusion set using the outer binding's
-                                    // values for the join variables, normalized for consistency.
-                                    if let Some(sample) = exclusion_set.iter().next() {
-                                        let key: Vec<(String, Value)> = sample
-                                            .iter()
-                                            .filter_map(|(var, _)| {
-                                                binding
-                                                    .get(var)
-                                                    .map(|val| (var.clone(), normalize_value(val)))
-                                            })
-                                            .collect();
-                                        if key.len() == sample.len() {
-                                            // All join vars are bound in the outer binding.
-                                            if exclusion_set.contains(&key) {
-                                                return false;
-                                            }
-                                            continue;
-                                        }
-                                        // Outer binding is underspecified (fewer vars than
-                                        // the exclusion set key) — fall back to slow path.
-                                        if not_body_matches(
-                                            not_body,
-                                            binding,
-                                            filtered_facts.clone(),
-                                            valid_at_value.clone(),
-                                            &registry,
-                                        ) {
-                                            return false;
-                                        }
-                                        continue;
-                                    }
-                                }
-                                // Slow path fallback (expr clauses or empty exclusion set with exprs)
-                                if not_body_matches(
-                                    not_body,
-                                    binding,
-                                    filtered_facts.clone(),
-                                    valid_at_value.clone(),
-                                    &registry,
-                                ) {
-                                    return false;
-                                }
-                            }
-                            None => {
-                                // Expr-only body: slow path.
-                                if not_body_matches(
-                                    not_body,
-                                    binding,
-                                    filtered_facts.clone(),
-                                    valid_at_value.clone(),
-                                    &registry,
-                                ) {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-
-                    // Check not-join-bodies.
-                    for ((join_vars, nj_clauses), nj_exclusion_entry) in
-                        not_join_clauses.iter().zip(not_join_exclusion_sets.iter())
-                    {
-                        match nj_exclusion_entry {
-                            Some((has_expr, key_vars, exclusion_set)) => {
-                                if !has_expr {
-                                    if key_vars.is_empty() {
-                                        // Body bound no join vars: if exclusion set non-empty,
-                                        // exclude all outer bindings (body always succeeds).
-                                        if !exclusion_set.is_empty() {
-                                            return false;
-                                        }
-                                        continue;
-                                    }
-                                    // Build probe key from outer binding using key_vars.
-                                    // Normalize values so keyword entities match ref entities.
-                                    let mut key: Vec<(String, Value)> = key_vars
-                                        .iter()
-                                        .filter_map(|v| {
-                                            binding
-                                                .get(v)
-                                                .map(|val| (v.clone(), normalize_value(val)))
-                                        })
-                                        .collect();
-                                    key.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-                                    if key.len() == key_vars.len() {
-                                        if exclusion_set.contains(&key) {
-                                            return false;
-                                        }
-                                        continue;
-                                    }
-                                    // Outer binding underspecified relative to the not-join body —
-                                    // fall back to the slow path so the body is correctly evaluated.
-                                    if evaluate_not_join(
-                                        join_vars,
-                                        nj_clauses,
-                                        binding,
-                                        filtered_facts.clone(),
-                                        &registry,
-                                    ) {
-                                        return false;
-                                    }
-                                    continue;
-                                }
-                                // Fall through to slow path if expr clauses present.
-                                if evaluate_not_join(
-                                    join_vars,
-                                    nj_clauses,
-                                    binding,
-                                    filtered_facts.clone(),
-                                    &registry,
-                                ) {
-                                    return false;
-                                }
-                            }
-                            None => {
-                                if evaluate_not_join(
-                                    join_vars,
-                                    nj_clauses,
-                                    binding,
-                                    filtered_facts.clone(),
-                                    &registry,
-                                ) {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-                    true
-                })
-                .collect()
-        };
-
-        let results =
-            apply_post_processing(not_filtered, &query.find, &query.with_vars, &registry)?;
+        let results = apply_post_processing(bindings, &query.find, &query.with_vars, &registry)?;
 
         Ok(QueryResult::QueryResults {
             vars: query.find.iter().map(|s| s.display_name()).collect(),
@@ -992,12 +747,20 @@ impl DatalogExecutor {
             }
         }
 
-        // Collect Pattern and Expr top-level clauses for the planner.
+        // Collect Pattern, Expr, Not, and NotJoin top-level clauses for the planner.
         // Rule invocations are converted to WhereClause::Pattern against derived_storage.
         let mut plan_clauses: Vec<WhereClause> = query
             .where_clauses
             .iter()
-            .filter(|c| matches!(c, WhereClause::Pattern(_) | WhereClause::Expr { .. }))
+            .filter(|c| {
+                matches!(
+                    c,
+                    WhereClause::Pattern(_)
+                        | WhereClause::Expr { .. }
+                        | WhereClause::Not(_)
+                        | WhereClause::NotJoin { .. }
+                )
+            })
             .cloned()
             .collect();
 
@@ -1030,9 +793,10 @@ impl DatalogExecutor {
             plan_clauses.push(WhereClause::Pattern(pattern));
         }
 
-        let planned = optimizer::plan(plan_clauses, &self.indexes);
+        let (planned, deferred_not_clauses) = optimizer::plan(plan_clauses, &self.indexes);
 
-        // Process planned clauses in order: Pattern → expand, Expr → filter/extend.
+        // Process planned clauses in order: Pattern → expand, Expr → filter/extend,
+        // Not/NotJoin → shrink bindings as soon as their variables are bound (#248).
         let mut bindings: Vec<Binding> = vec![Binding::new()];
         for (clause, hint) in planned {
             match clause {
@@ -1061,6 +825,24 @@ impl DatalogExecutor {
                         })
                         .collect();
                 }
+                WhereClause::Not(body) => {
+                    bindings = apply_not_clause_derived(
+                        bindings,
+                        &body,
+                        derived_facts.clone(),
+                        valid_at_value.clone(),
+                        &registry,
+                    );
+                }
+                WhereClause::NotJoin { join_vars, clauses } => {
+                    bindings = apply_not_join_clause_derived(
+                        bindings,
+                        &join_vars,
+                        &clauses,
+                        derived_facts.clone(),
+                        &registry,
+                    );
+                }
                 _ => {}
             }
         }
@@ -1070,7 +852,7 @@ impl DatalogExecutor {
             .rules
             .read()
             .map_err(|_| anyhow!("rules lock poisoned"))?;
-        let bindings = apply_or_clauses(
+        let mut bindings = apply_or_clauses(
             &query.where_clauses,
             bindings,
             derived_facts.clone(),
@@ -1081,166 +863,35 @@ impl DatalogExecutor {
         )?;
         drop(rules_guard);
 
-        // Apply not-post-filter for WhereClause::Not and WhereClause::NotJoin clauses
-        // in the query body. (The StratifiedEvaluator handles `not`/`not-join` in rule
-        // bodies; this handles them appearing directly in the query body alongside rule
-        // invocations.)
+        // Apply Not/NotJoin clauses the planner couldn't place inline (#248) — their
+        // variables are only bound by the Or/OrJoin pass above. (The StratifiedEvaluator
+        // handles `not`/`not-join` in rule bodies; this handles them appearing directly
+        // in the query body alongside rule invocations.)
         #[cfg_attr(feature = "wasm", allow(unused_mut))]
-        let mut not_clauses: Vec<&Vec<WhereClause>> = query
-            .where_clauses
-            .iter()
-            .filter_map(|c| match c {
-                WhereClause::Not(inner) => Some(inner),
-                _ => None,
-            })
-            .collect();
-
-        #[cfg_attr(feature = "wasm", allow(unused_mut))]
-        let mut not_join_clauses: Vec<(Vec<String>, Vec<WhereClause>)> = query
-            .where_clauses
-            .iter()
-            .filter_map(|c| match c {
-                WhereClause::NotJoin { join_vars, clauses } => {
-                    Some((join_vars.clone(), clauses.clone()))
-                }
-                _ => None,
-            })
-            .collect();
-
-        // WASM omission: small datasets + determinism — see optimizer::selectivity_score().
+        let mut deferred_not_clauses = deferred_not_clauses;
         #[cfg(not(feature = "wasm"))]
-        not_clauses.sort_by_key(|body| optimizer::clause_cost(&WhereClause::Not(body.to_vec())));
-        // WASM omission: small datasets + determinism — see optimizer::selectivity_score().
-        #[cfg(not(feature = "wasm"))]
-        not_join_clauses.sort_by_key(|(vars, clauses)| {
-            optimizer::clause_cost(&WhereClause::NotJoin {
-                join_vars: vars.clone(),
-                clauses: clauses.clone(),
-            })
-        });
+        deferred_not_clauses.sort_by_key(optimizer::clause_cost);
+        for clause in deferred_not_clauses {
+            bindings = match clause {
+                WhereClause::Not(body) => apply_not_clause_derived(
+                    bindings,
+                    &body,
+                    derived_facts.clone(),
+                    valid_at_value.clone(),
+                    &registry,
+                ),
+                WhereClause::NotJoin { join_vars, clauses } => apply_not_join_clause_derived(
+                    bindings,
+                    &join_vars,
+                    &clauses,
+                    derived_facts.clone(),
+                    &registry,
+                ),
+                _ => bindings,
+            };
+        }
 
-        let not_filtered: Vec<_> = if not_clauses.is_empty() && not_join_clauses.is_empty() {
-            bindings
-        } else {
-            bindings
-                .into_iter()
-                .filter(|binding| {
-                    for not_body in &not_clauses {
-                        // Collect pattern and rule-invocation clauses into patterns.
-                        let substituted: Vec<Pattern> = not_body
-                            .iter()
-                            .filter_map(|c| match c {
-                                WhereClause::Pattern(p) => {
-                                    Some(crate::query::datalog::evaluator::substitute_pattern(
-                                        p, binding,
-                                    ))
-                                }
-                                WhereClause::RuleInvocation { predicate, args } => {
-                                    // Convert rule invocation to a pattern against derived storage.
-                                    // Apply the current binding to any variables in args first.
-                                    let resolved_args: Vec<EdnValue> = args
-                                        .iter()
-                                        .map(|a| match a {
-                                            EdnValue::Symbol(s) if s.starts_with('?') => {
-                                                // Look up the bound value and convert back to EdnValue
-                                                binding
-                                                    .get(s)
-                                                    .map(|v| match v {
-                                                        Value::Keyword(k) => {
-                                                            EdnValue::Keyword(k.clone())
-                                                        }
-                                                        Value::String(s) => {
-                                                            EdnValue::String(s.clone())
-                                                        }
-                                                        Value::Integer(i) => EdnValue::Integer(*i),
-                                                        Value::Float(f) => EdnValue::Float(*f),
-                                                        Value::Boolean(b) => EdnValue::Boolean(*b),
-                                                        Value::Ref(u) => EdnValue::Uuid(*u),
-                                                        Value::Null => EdnValue::Nil,
-                                                    })
-                                                    .unwrap_or_else(|| a.clone())
-                                            }
-                                            other => other.clone(),
-                                        })
-                                        .collect();
-                                    // Safety: match arms guarantee len()==1 or len()==2.
-                                    let pattern = match resolved_args.len() {
-                                        1 => {
-                                            #[allow(clippy::indexing_slicing)]
-                                            let entity = resolved_args[0].clone();
-                                            Pattern::new(
-                                                entity,
-                                                EdnValue::Keyword(format!(":{}", predicate)),
-                                                EdnValue::Symbol("?_rule_value".to_string()),
-                                            )
-                                        }
-                                        2 => {
-                                            #[allow(clippy::indexing_slicing)]
-                                            let entity = resolved_args[0].clone();
-                                            #[allow(clippy::indexing_slicing)]
-                                            let value = resolved_args[1].clone();
-                                            Pattern::new(
-                                                entity,
-                                                EdnValue::Keyword(format!(":{}", predicate)),
-                                                value,
-                                            )
-                                        }
-                                        _ => return None,
-                                    };
-                                    Some(crate::query::datalog::evaluator::substitute_pattern(
-                                        &pattern, binding,
-                                    ))
-                                }
-                                _ => None,
-                            })
-                            .collect();
-
-                        // Compute not_bindings: if no patterns, seed with current binding.
-                        let m = PatternMatcher::from_slice_with_valid_at(
-                            derived_facts.clone(),
-                            valid_at_value.clone(),
-                        );
-                        let mut not_bindings: Vec<Binding> = if substituted.is_empty() {
-                            vec![binding.clone()]
-                        } else {
-                            m.match_patterns(&substituted)
-                                .into_iter()
-                                .map(|mut nb| {
-                                    for (k, v) in binding {
-                                        nb.entry(k.clone()).or_insert_with(|| v.clone());
-                                    }
-                                    nb
-                                })
-                                .collect()
-                        };
-
-                        // Apply Expr clauses from the not body.
-                        // Errors (e.g. unknown UDF predicate) are treated as "no match".
-                        not_bindings = apply_expr_clauses(not_bindings, not_body, &registry)
-                            .unwrap_or_default();
-                        if !not_bindings.is_empty() {
-                            return false; // not condition violated
-                        }
-                    }
-                    // Use the already-acquired registry instead of re-acquiring the lock.
-                    for (join_vars, nj_clauses) in &not_join_clauses {
-                        if evaluate_not_join(
-                            join_vars,
-                            nj_clauses,
-                            binding,
-                            derived_facts.clone(),
-                            &registry,
-                        ) {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect()
-        };
-
-        let results =
-            apply_post_processing(not_filtered, &query.find, &query.with_vars, &registry)?;
+        let results = apply_post_processing(bindings, &query.find, &query.with_vars, &registry)?;
 
         Ok(QueryResult::QueryResults {
             vars: query.find.iter().map(|s| s.display_name()).collect(),
@@ -1363,6 +1014,315 @@ fn not_body_matches(
     !not_bindings.is_empty()
 }
 
+/// Filter `bindings` through a single `(not ...)` body, for the rule-free query path
+/// (`execute_query`). Used both inline — as `plan()` pushes a `Not` clause to the
+/// earliest position where its variables are bound — and for clauses `plan()` had to
+/// defer (evaluated last, after Or/OrJoin, exactly as before push-down existed).
+///
+/// Precomputes one exclusion set from the body's patterns (matched once against
+/// `filtered_facts`, independent of `bindings`), then probes it per binding — same
+/// fast path as the pre-#248 post-filter, just scoped to one clause at a time.
+fn apply_not_clause(
+    bindings: Vec<Binding>,
+    not_body: &[WhereClause],
+    filtered_facts: Arc<[Fact]>,
+    valid_at_value: Value,
+    registry: &FunctionRegistry,
+) -> Vec<Binding> {
+    let has_expr = not_body
+        .iter()
+        .any(|c| matches!(c, WhereClause::Expr { .. }));
+    let patterns: Vec<Pattern> = not_body
+        .iter()
+        .filter_map(|c| match c {
+            WhereClause::Pattern(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+
+    if patterns.is_empty() {
+        // Expr-only body: no pre-computation possible, fall back to per-binding eval.
+        return bindings
+            .into_iter()
+            .filter(|b| {
+                !not_body_matches(
+                    not_body,
+                    b,
+                    filtered_facts.clone(),
+                    valid_at_value.clone(),
+                    registry,
+                )
+            })
+            .collect();
+    }
+
+    let matcher =
+        PatternMatcher::from_slice_with_valid_at(filtered_facts.clone(), valid_at_value.clone());
+    let exclusion_set: std::collections::HashSet<Vec<(String, Value)>> = matcher
+        .match_patterns(&patterns)
+        .into_iter()
+        .map(|mut b| {
+            b.retain(|k, _| !k.starts_with("__f"));
+            let mut kv: Vec<(String, Value)> = b
+                .into_iter()
+                .map(|(k, v)| (k, normalize_value(&v)))
+                .collect();
+            kv.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            kv
+        })
+        .collect();
+
+    if exclusion_set.is_empty() && !has_expr {
+        // No excluding bindings anywhere — every outer binding is safe.
+        return bindings;
+    }
+
+    bindings
+        .into_iter()
+        .filter(|binding| {
+            if !has_expr && let Some(sample) = exclusion_set.iter().next() {
+                let key: Vec<(String, Value)> = sample
+                    .iter()
+                    .filter_map(|(var, _)| {
+                        binding
+                            .get(var)
+                            .map(|val| (var.clone(), normalize_value(val)))
+                    })
+                    .collect();
+                if key.len() == sample.len() {
+                    return !exclusion_set.contains(&key);
+                }
+                // Outer binding is underspecified (fewer vars than the exclusion set
+                // key) — fall back to the slow path.
+            }
+            !not_body_matches(
+                not_body,
+                binding,
+                filtered_facts.clone(),
+                valid_at_value.clone(),
+                registry,
+            )
+        })
+        .collect()
+}
+
+/// Filter `bindings` through a single `(not-join [...] ...)` body, for the rule-free
+/// query path (`execute_query`). Mirrors [`apply_not_clause`] but keys the exclusion
+/// set on `join_vars` (the subset actually bound in every body row) instead of all
+/// body variables.
+fn apply_not_join_clause(
+    bindings: Vec<Binding>,
+    join_vars: &[String],
+    nj_clauses: &[WhereClause],
+    filtered_facts: Arc<[Fact]>,
+    valid_at_value: Value,
+    registry: &FunctionRegistry,
+) -> Vec<Binding> {
+    let has_expr = nj_clauses
+        .iter()
+        .any(|c| matches!(c, WhereClause::Expr { .. }));
+    let patterns: Vec<Pattern> = nj_clauses
+        .iter()
+        .filter_map(|c| match c {
+            WhereClause::Pattern(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+
+    if patterns.is_empty() {
+        return bindings
+            .into_iter()
+            .filter(|b| {
+                !evaluate_not_join(join_vars, nj_clauses, b, filtered_facts.clone(), registry)
+            })
+            .collect();
+    }
+
+    let matcher =
+        PatternMatcher::from_slice_with_valid_at(filtered_facts.clone(), valid_at_value.clone());
+    let body_bindings = matcher.match_patterns(&patterns);
+
+    let key_vars: Vec<String> = if body_bindings.is_empty() {
+        join_vars.to_vec()
+    } else {
+        join_vars
+            .iter()
+            .filter(|v| body_bindings.iter().all(|b| b.contains_key(*v)))
+            .cloned()
+            .collect()
+    };
+    let exclusion_set: std::collections::HashSet<Vec<(String, Value)>> = body_bindings
+        .iter()
+        .map(|b| {
+            let mut kv: Vec<(String, Value)> = key_vars
+                .iter()
+                .filter_map(|v| b.get(v).map(|val| (v.clone(), normalize_value(val))))
+                .collect();
+            kv.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            kv
+        })
+        .collect();
+
+    bindings
+        .into_iter()
+        .filter(|binding| {
+            if !has_expr {
+                if key_vars.is_empty() {
+                    // Body bound no join vars: if exclusion set non-empty, the body
+                    // always succeeds, so it excludes every outer binding.
+                    return exclusion_set.is_empty();
+                }
+                let mut key: Vec<(String, Value)> = key_vars
+                    .iter()
+                    .filter_map(|v| binding.get(v).map(|val| (v.clone(), normalize_value(val))))
+                    .collect();
+                key.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                if key.len() == key_vars.len() {
+                    return !exclusion_set.contains(&key);
+                }
+                // Outer binding underspecified relative to the not-join body — fall
+                // back to the slow path so the body is correctly evaluated.
+            }
+            !evaluate_not_join(
+                join_vars,
+                nj_clauses,
+                binding,
+                filtered_facts.clone(),
+                registry,
+            )
+        })
+        .collect()
+}
+
+/// Returns true if `not_body` is satisfied against `binding` (i.e. the outer binding
+/// should be excluded) — for the rules query path (`execute_query_with_rules`), where
+/// a `not` body may contain `WhereClause::RuleInvocation` against `derived_facts`
+/// (all referenced rules are pre-evaluated by the `StratifiedEvaluator` before this
+/// runs). No exclusion-set precomputation here: rule-invocation args are resolved
+/// per binding, same as the pre-#248 post-filter.
+fn not_clause_violated_via_rules(
+    not_body: &[WhereClause],
+    binding: &Binding,
+    derived_facts: Arc<[Fact]>,
+    valid_at_value: Value,
+    registry: &FunctionRegistry,
+) -> bool {
+    use crate::query::datalog::evaluator::substitute_pattern;
+
+    let substituted: Vec<Pattern> = not_body
+        .iter()
+        .filter_map(|c| match c {
+            WhereClause::Pattern(p) => Some(substitute_pattern(p, binding)),
+            WhereClause::RuleInvocation { predicate, args } => {
+                // Convert rule invocation to a pattern against derived storage.
+                // Apply the current binding to any variables in args first.
+                let resolved_args: Vec<EdnValue> = args
+                    .iter()
+                    .map(|a| match a {
+                        EdnValue::Symbol(s) if s.starts_with('?') => {
+                            // Look up the bound value and convert back to EdnValue
+                            binding
+                                .get(s)
+                                .map(|v| match v {
+                                    Value::Keyword(k) => EdnValue::Keyword(k.clone()),
+                                    Value::String(s) => EdnValue::String(s.clone()),
+                                    Value::Integer(i) => EdnValue::Integer(*i),
+                                    Value::Float(f) => EdnValue::Float(*f),
+                                    Value::Boolean(b) => EdnValue::Boolean(*b),
+                                    Value::Ref(u) => EdnValue::Uuid(*u),
+                                    Value::Null => EdnValue::Nil,
+                                })
+                                .unwrap_or_else(|| a.clone())
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+                // Safety: match arms guarantee len()==1 or len()==2.
+                let pattern = match resolved_args.len() {
+                    1 => {
+                        #[allow(clippy::indexing_slicing)]
+                        let entity = resolved_args[0].clone();
+                        Pattern::new(
+                            entity,
+                            EdnValue::Keyword(format!(":{}", predicate)),
+                            EdnValue::Symbol("?_rule_value".to_string()),
+                        )
+                    }
+                    2 => {
+                        #[allow(clippy::indexing_slicing)]
+                        let entity = resolved_args[0].clone();
+                        #[allow(clippy::indexing_slicing)]
+                        let value = resolved_args[1].clone();
+                        Pattern::new(entity, EdnValue::Keyword(format!(":{}", predicate)), value)
+                    }
+                    _ => return None,
+                };
+                Some(substitute_pattern(&pattern, binding))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let m = PatternMatcher::from_slice_with_valid_at(derived_facts.clone(), valid_at_value);
+    let mut not_bindings: Vec<Binding> = if substituted.is_empty() {
+        vec![binding.clone()]
+    } else {
+        m.match_patterns(&substituted)
+            .into_iter()
+            .map(|mut nb| {
+                for (k, v) in binding {
+                    nb.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+                nb
+            })
+            .collect()
+    };
+
+    // Apply Expr clauses from the not body. Errors (e.g. unknown UDF predicate) are
+    // treated as "no match" so the outer row is kept (not-condition not violated).
+    not_bindings = apply_expr_clauses(not_bindings, not_body, registry).unwrap_or_default();
+    !not_bindings.is_empty()
+}
+
+/// Filter `bindings` through a single `(not ...)` body for the rules query path.
+/// See [`not_clause_violated_via_rules`].
+fn apply_not_clause_derived(
+    bindings: Vec<Binding>,
+    not_body: &[WhereClause],
+    derived_facts: Arc<[Fact]>,
+    valid_at_value: Value,
+    registry: &FunctionRegistry,
+) -> Vec<Binding> {
+    bindings
+        .into_iter()
+        .filter(|b| {
+            !not_clause_violated_via_rules(
+                not_body,
+                b,
+                derived_facts.clone(),
+                valid_at_value.clone(),
+                registry,
+            )
+        })
+        .collect()
+}
+
+/// Filter `bindings` through a single `(not-join [...] ...)` body for the rules query
+/// path — no exclusion-set fast path here (matches the pre-#248 post-filter, which
+/// never had one for this path either).
+fn apply_not_join_clause_derived(
+    bindings: Vec<Binding>,
+    join_vars: &[String],
+    nj_clauses: &[WhereClause],
+    derived_facts: Arc<[Fact]>,
+    registry: &FunctionRegistry,
+) -> Vec<Binding> {
+    bindings
+        .into_iter()
+        .filter(|b| !evaluate_not_join(join_vars, nj_clauses, b, derived_facts.clone(), registry))
+        .collect()
+}
+
 /// Extract plain variable values from bindings (non-aggregate path).
 fn extract_variables(
     bindings: Vec<std::collections::HashMap<String, Value>>,
@@ -1386,14 +1346,6 @@ fn extract_variables(
 }
 
 type Binding = std::collections::HashMap<String, Value>;
-/// Internal type alias for pre-computed not-body exclusion sets.
-type NotExclusionEntry = Option<(bool, std::collections::HashSet<Vec<(String, Value)>>)>;
-/// Internal type alias for pre-computed not-join exclusion sets.
-type NotJoinExclusionEntry = Option<(
-    bool,
-    Vec<String>,
-    std::collections::HashSet<Vec<(String, Value)>>,
-)>;
 
 /// Unified post-processing: handles plain-variable extraction, aggregation,
 /// window functions, and mixed (aggregate + window) queries.
@@ -1893,10 +1845,9 @@ pub(crate) fn apply_or_clauses(
                 let sorted_or_branches: Vec<&Vec<WhereClause>> = {
                     #[cfg_attr(feature = "wasm", allow(unused_mut))]
                     let mut b: Vec<&Vec<WhereClause>> = branches.iter().collect();
-                    // Sort branches by cost ascending so cheaper branches evaluate first.
+                    // Sort branches by cost ascending so cheaper branches evaluate first,
+                    // maximizing the chance the short-circuit below fires early (#250).
                     // WASM omission: small datasets + determinism — see optimizer::selectivity_score().
-                    // Note: all branches still evaluated (no short-circuit); ordering is
-                    // infrastructure for issue #250.
                     #[cfg(not(feature = "wasm"))]
                     b.sort_by_key(|br| optimizer::branch_cost(br));
                     b
@@ -1948,6 +1899,15 @@ pub(crate) fn apply_or_clauses(
                 let mut seen_keys: std::collections::HashSet<Vec<(String, Value)>> =
                     std::collections::HashSet::new();
 
+                // Variable names already bound in the incoming scope — used below to detect
+                // whether a branch introduces a *new* variable (#250 short-circuit gating).
+                #[cfg(not(feature = "wasm"))]
+                let incoming_var_names: std::collections::HashSet<String> = bindings
+                    .iter()
+                    .flat_map(|b| b.keys().cloned())
+                    .filter(|k| !k.starts_with("__"))
+                    .collect();
+
                 for branch in &sorted_or_branches {
                     let branch_result = evaluate_branch(
                         branch,
@@ -1968,6 +1928,57 @@ pub(crate) fn apply_or_clauses(
                         key.sort_unstable_by(|a, b| a.0.cmp(&b.0));
                         if seen_keys.insert(key) {
                             union_bindings.push(b);
+                        }
+                    }
+
+                    // Short-circuit (#250): unlike or-join, a plain `or` branch's newly
+                    // introduced variables DO survive into the merged result (see the
+                    // `or_insert_with` merge below), so two branches matching the same
+                    // shared key can legitimately produce different, both-needed rows.
+                    // Skipping a branch is only safe when the branches evaluated so far
+                    // introduce no variable beyond what's already bound in the incoming
+                    // scope — i.e. this `or` is a pure filter (all branches bind the same
+                    // new-var set per the parser's or-safety check), so any further match on
+                    // an already-covered key would just re-derive an identical row.
+                    #[cfg(not(feature = "wasm"))]
+                    {
+                        let branch_var_names: std::collections::HashSet<&str> = union_bindings
+                            .iter()
+                            .flat_map(|bb| bb.keys().map(|k| k.as_str()))
+                            .filter(|k| !k.starts_with("__"))
+                            .collect();
+                        let is_pure_filter = !branch_var_names.is_empty()
+                            && branch_var_names
+                                .iter()
+                                .all(|v| incoming_var_names.contains(*v));
+                        if is_pure_filter {
+                            let covered: std::collections::HashSet<Vec<(String, Value)>> =
+                                union_bindings
+                                    .iter()
+                                    .map(|b| {
+                                        let mut k: Vec<(String, Value)> = branch_var_names
+                                            .iter()
+                                            .filter_map(|v| {
+                                                b.get(*v).map(|val| (v.to_string(), val.clone()))
+                                            })
+                                            .collect();
+                                        k.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                                        k
+                                    })
+                                    .collect();
+                            let fully_covered = bindings.iter().all(|incoming| {
+                                let mut k: Vec<(String, Value)> = branch_var_names
+                                    .iter()
+                                    .filter_map(|v| {
+                                        incoming.get(*v).map(|val| (v.to_string(), val.clone()))
+                                    })
+                                    .collect();
+                                k.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                                covered.contains(&k)
+                            });
+                            if fully_covered {
+                                break;
+                            }
                         }
                     }
                 }
@@ -2049,10 +2060,9 @@ pub(crate) fn apply_or_clauses(
                 let sorted_oj_branches: Vec<&Vec<WhereClause>> = {
                     #[cfg_attr(feature = "wasm", allow(unused_mut))]
                     let mut b: Vec<&Vec<WhereClause>> = branches.iter().collect();
-                    // Sort branches by cost ascending so cheaper branches evaluate first.
+                    // Sort branches by cost ascending so cheaper branches evaluate first,
+                    // maximizing the chance the short-circuit below fires early (#250).
                     // WASM omission: small datasets + determinism — see optimizer::selectivity_score().
-                    // Note: all branches still evaluated (no short-circuit); ordering is
-                    // infrastructure for issue #250.
                     #[cfg(not(feature = "wasm"))]
                     b.sort_by_key(|br| optimizer::branch_cost(br));
                     b
@@ -2070,9 +2080,28 @@ pub(crate) fn apply_or_clauses(
                 }
 
                 let empty_seed: Vec<Binding> = vec![HashMap::new()];
-                let mut projected: Vec<Binding> = Vec::new();
                 let mut seen_proj: std::collections::HashSet<Vec<(String, Value)>> =
                     std::collections::HashSet::new();
+                let mut branch_map: HashMap<Vec<(String, Value)>, Vec<Binding>> = HashMap::new();
+
+                // Distinct join_vars-keyed tuples required by the incoming bindings (#250).
+                // Every branch is projected to outer_keys below, which are all variables
+                // already bound before this or-join runs — a branch can never introduce a
+                // variable that survives into the result. So once every required key has at
+                // least one match, a further (costlier) branch matching that same key can
+                // only add a row identical to one already merged, which the dedup below
+                // would drop anyway — unlike plain `or`, this holds regardless of what the
+                // branch itself binds internally.
+                #[cfg(not(feature = "wasm"))]
+                let required_keys: std::collections::HashSet<Vec<(String, Value)>> = bindings
+                    .iter()
+                    .map(|incoming| {
+                        join_vars
+                            .iter()
+                            .filter_map(|v| incoming.get(v).map(|val| (v.clone(), val.clone())))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
 
                 for branch in &sorted_oj_branches {
                     let branch_result = evaluate_branch(
@@ -2094,19 +2123,18 @@ pub(crate) fn apply_or_clauses(
                             b.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                         key.sort_unstable_by(|a, b| a.0.cmp(&b.0));
                         if seen_proj.insert(key) {
-                            projected.push(b);
+                            let bkey: Vec<(String, Value)> = join_vars
+                                .iter()
+                                .filter_map(|v| b.get(v).map(|val| (v.clone(), val.clone())))
+                                .collect();
+                            branch_map.entry(bkey).or_default().push(b);
                         }
                     }
-                }
 
-                // Build HashMap keyed on join_vars tuple.
-                let mut branch_map: HashMap<Vec<(String, Value)>, Vec<Binding>> = HashMap::new();
-                for b in projected {
-                    let key: Vec<(String, Value)> = join_vars
-                        .iter()
-                        .filter_map(|v| b.get(v).map(|val| (v.clone(), val.clone())))
-                        .collect();
-                    branch_map.entry(key).or_default().push(b);
+                    #[cfg(not(feature = "wasm"))]
+                    if required_keys.iter().all(|k| branch_map.contains_key(k)) {
+                        break;
+                    }
                 }
 
                 let mut result: Vec<Binding> = Vec::new();
