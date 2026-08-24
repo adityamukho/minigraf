@@ -2636,6 +2636,12 @@ mod tests {
             result.is_err(),
             "trailing tokens after a complete form must be rejected"
         );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing input"),
+            "wrong error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -2646,6 +2652,12 @@ mod tests {
         assert!(
             result.is_err(),
             "trailing tokens after a complete command must be rejected"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing input"),
+            "wrong error: {}",
+            msg
         );
     }
 
@@ -2659,6 +2671,12 @@ mod tests {
             result.is_err(),
             "extra trailing argument to query must be rejected, not silently ignored"
         );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing argument"),
+            "wrong error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -2668,6 +2686,12 @@ mod tests {
         assert!(
             result.is_err(),
             "extra trailing argument to rule must be rejected, not silently ignored"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected trailing argument"),
+            "wrong error: {}",
+            msg
         );
     }
 
