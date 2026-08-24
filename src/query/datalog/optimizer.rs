@@ -235,15 +235,25 @@ pub fn plan(
         result.insert(insert_pos, (expr_clause, None));
     }
 
-    // Sort not/not-join clauses cheapest-first — tie-break for clauses that land at
-    // the same insertion point, mirroring the executor's previous post-filter ordering.
+    // Sort not/not-join clauses most-expensive-first: each `result.insert(pos, ..)`
+    // below shifts an already-inserted clause at the same `pos` one slot later, so
+    // processing in descending cost order lands the cheapest clause at `pos` last —
+    // i.e. final relative order at any shared insertion point comes out ascending
+    // (cheapest first), mirroring the executor's previous post-filter ordering.
     #[cfg(not(feature = "wasm"))]
-    not_clauses.sort_by_key(clause_cost);
+    not_clauses.sort_by_key(|c| std::cmp::Reverse(clause_cost(c)));
 
     let mut deferred: Vec<WhereClause> = Vec::new();
     for nc in not_clauses {
         let required: std::collections::HashSet<String> = match &nc {
-            WhereClause::Not(body) => clause_ref_vars(body),
+            // `?_`-prefixed vars are the wildcard idiom (e.g. `(not [?e :attr ?_x])`)
+            // and never need to be bound by an outer clause — same convention the
+            // NotJoin arm below already applies to `join_vars`, and that
+            // `check_not_join_safety`/`outer_vars_from_clause` (parser.rs) apply.
+            WhereClause::Not(body) => clause_ref_vars(body)
+                .into_iter()
+                .filter(|v| !v.starts_with("?_"))
+                .collect(),
             WhereClause::NotJoin { join_vars, .. } => join_vars
                 .iter()
                 .filter(|v| !v.starts_with("?_"))
@@ -729,6 +739,79 @@ mod tests {
         assert!(
             matches!(planned[0].0, WhereClause::Not(_)),
             "Not clause with no required vars must be placed first"
+        );
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_not_wildcard_var_does_not_block_placement() {
+        use crate::storage::index::Indexes;
+        // `?_x` is the wildcard idiom — it must not count as an outer dependency,
+        // matching the parser's own treatment of `?_`-prefixed vars (and the
+        // NotJoin arm's `join_vars` filter below).
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":val"), var("v")));
+        let p2 = WhereClause::Pattern(make_pattern(var("e"), kw(":other"), var("o")));
+        let not_clause = WhereClause::Not(vec![WhereClause::Pattern(make_pattern(
+            var("e"),
+            kw(":name"),
+            var("_x"),
+        ))]);
+        let (planned, deferred) = plan(vec![p1, p2, not_clause], &Indexes::new());
+        assert_eq!(planned.len(), 3);
+        assert!(
+            deferred.is_empty(),
+            "a Not body referencing only ?e (bound) and ?_x (wildcard) must be placeable"
+        );
+        assert!(
+            matches!(planned[1].0, WhereClause::Not(_)),
+            "Not must be pushed right after the pattern binding ?e, not deferred to the end"
+        );
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_multiple_not_clauses_at_same_position_stay_cheapest_first() {
+        use crate::storage::index::Indexes;
+        // Both Not bodies need only ?e (bound by p1) and land at the same insertion
+        // point. The cheaper one (fully-bound pattern, cost 1) must end up before
+        // the more expensive one (2-bound pattern, cost 10) in the final plan.
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":val"), var("v")));
+        let expensive_not = WhereClause::Not(vec![WhereClause::Pattern(make_pattern(
+            var("e"),
+            kw(":flag"),
+            EdnValue::Boolean(true),
+        ))]);
+        // Two patterns so `branch_cost`'s min-over-patterns is dragged down to 1 by
+        // the fully-bound (unrelated) second pattern, while `clause_ref_vars` still
+        // only requires ?e (the unrelated pattern references no variables).
+        let cheap_not = WhereClause::Not(vec![
+            WhereClause::Pattern(make_pattern(
+                var("e"),
+                kw(":other-flag"),
+                EdnValue::Boolean(true),
+            )),
+            WhereClause::Pattern(make_pattern(entity_lit(), kw(":marker"), str_val("x"))),
+        ]);
+        // Declared expensive-first, so a naive "preserve input order" bug wouldn't
+        // be masked by already-correct declaration order.
+        let (planned, deferred) = plan(
+            vec![p1, expensive_not.clone(), cheap_not.clone()],
+            &Indexes::new(),
+        );
+        assert_eq!(planned.len(), 3);
+        assert!(deferred.is_empty());
+        let cheap_pos = planned
+            .iter()
+            .position(|(c, _)| c == &cheap_not)
+            .expect("cheap not must be placed");
+        let expensive_pos = planned
+            .iter()
+            .position(|(c, _)| c == &expensive_not)
+            .expect("expensive not must be placed");
+        assert!(
+            cheap_pos < expensive_pos,
+            "cheaper Not clause must run before the more expensive one when both \
+             land at the same insertion point"
         );
     }
 
