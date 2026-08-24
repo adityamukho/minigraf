@@ -227,6 +227,47 @@ pub fn populate_with_not_rule(n: usize, excluded: usize) -> Arc<Minigraf> {
     Arc::new(db)
 }
 
+/// In-memory DB with `n` value facts, `excluded` banned entities, and three more
+/// attributes (`:x`, `:y`, `:z`) present on every entity.
+///
+/// Schema:
+///   `:e{i} :val {i}` for i in 0..n
+///   `:e{i} :banned true` for i in 0..excluded
+///   `:e{i} :x true`, `:e{i} :y true`, `:e{i} :z true` for i in 0..n
+///
+/// Used for the `not` push-down benchmark (#248): with `not` deferred to the end
+/// (pre-push-down), `:x`/`:y`/`:z` all join against the full `n`-row binding set;
+/// with `not` pushed to right after `?e` is bound (post-push-down), they join
+/// against the already-`excluded`-filtered set instead.
+///   `(query [:find ?e :where [?e :val ?v] (not [?e :banned true]) \
+///            [?e :x true] [?e :y true] [?e :z true]])`
+pub fn populate_with_not_pushdown(n: usize, excluded: usize) -> Arc<Minigraf> {
+    let db = Minigraf::in_memory().unwrap();
+    insert_val_facts(&db, n);
+    for batch_start in (0..excluded).step_by(100) {
+        let batch_end = (batch_start + 100).min(excluded);
+        let mut cmd = String::from("(transact [");
+        for i in batch_start..batch_end {
+            cmd.push_str(&format!("[:e{} :banned true]", i));
+        }
+        cmd.push_str("])");
+        db.execute(&cmd).unwrap();
+    }
+    for batch_start in (0..n).step_by(100) {
+        let batch_end = (batch_start + 100).min(n);
+        let mut cmd = String::from("(transact [");
+        for i in batch_start..batch_end {
+            cmd.push_str(&format!(
+                "[:e{i} :x true] [:e{i} :y true] [:e{i} :z true]",
+                i = i
+            ));
+        }
+        cmd.push_str("])");
+        db.execute(&cmd).unwrap();
+    }
+    Arc::new(db)
+}
+
 // ── Disjunction fixtures ──────────────────────────────────────────────────────
 
 /// In-memory DB with `n` value facts plus `a_count` entities with `:tag-a` and

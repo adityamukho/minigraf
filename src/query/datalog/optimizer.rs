@@ -117,23 +117,64 @@ fn pattern_bound_vars(p: &Pattern) -> Vec<String> {
     vars
 }
 
+/// Collect all logic-variable names referenced anywhere within a slice of where
+/// clauses — used to determine a `Not`/`NotJoin` clause's dependency on preceding
+/// bindings. Walks `Pattern` positions, `Expr` trees (+ output binding), nested
+/// `Not`/`NotJoin` bodies, and `RuleInvocation` arguments.
+fn clause_ref_vars(clauses: &[WhereClause]) -> std::collections::HashSet<String> {
+    let mut vars = std::collections::HashSet::new();
+    for clause in clauses {
+        match clause {
+            WhereClause::Pattern(p) => vars.extend(pattern_bound_vars(p)),
+            WhereClause::Expr { expr, binding } => {
+                vars.extend(expr_vars(expr));
+                if let Some(b) = binding {
+                    vars.insert(b.clone());
+                }
+            }
+            WhereClause::Not(inner) => vars.extend(clause_ref_vars(inner)),
+            WhereClause::NotJoin { clauses: inner, .. } => vars.extend(clause_ref_vars(inner)),
+            WhereClause::RuleInvocation { args, .. } => {
+                for a in args {
+                    if let EdnValue::Symbol(s) = a
+                        && s.starts_with('?')
+                    {
+                        vars.insert(s.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    vars
+}
+
 /// Plan a list of where clauses: assign index hints to Pattern entries, push Expr
 /// entries to the earliest position where all their variables are bound by preceding
-/// patterns, and (non-wasm) sort patterns by selectivity.
+/// patterns, push `Not`/`NotJoin` entries to the earliest position where all their
+/// required variables are bound by preceding patterns, and (non-wasm) sort patterns
+/// by selectivity.
 ///
-/// Only `WhereClause::Pattern` and `WhereClause::Expr` variants should be passed in.
-/// `Not`, `NotJoin`, `Or`, `OrJoin`, and `RuleInvocation` variants are handled by
-/// the executor/evaluator and must not appear here.
+/// `Pattern`, `Expr`, `Not`, and `NotJoin` variants may be passed in. `Or`, `OrJoin`,
+/// and top-level `RuleInvocation` are handled by the executor and must not appear here.
 ///
-/// Returns an interleaved `Vec<(WhereClause, Option<IndexHint>)>` where Pattern entries
-/// carry `Some(hint)` and Expr entries carry `None`.
+/// A `Not`/`NotJoin` clause whose required variables (all body variables for `Not`;
+/// `join_vars` for `NotJoin`) are never fully bound by any prefix of the planned
+/// patterns is returned in the second element (`deferred`) rather than being placed —
+/// it depends on a binding source outside this clause list (e.g. an `Or`/`OrJoin`
+/// clause, which the executor applies after this plan) and must be evaluated by the
+/// executor's post-filter instead, to avoid running it before its dependency is bound.
+///
+/// Returns `(interleaved, deferred)` where `interleaved` pairs each Pattern with
+/// `Some(hint)` and each Expr/Not/NotJoin with `None`.
 pub fn plan(
     clauses: Vec<WhereClause>,
     _indexes: &crate::storage::index::Indexes,
-) -> Vec<(WhereClause, Option<IndexHint>)> {
-    // Separate into patterns (with hints) and exprs.
+) -> (Vec<(WhereClause, Option<IndexHint>)>, Vec<WhereClause>) {
+    // Separate into patterns (with hints), exprs, and not/not-join clauses.
     let mut patterns: Vec<(WhereClause, IndexHint)> = Vec::new();
     let mut exprs: Vec<WhereClause> = Vec::new();
+    let mut not_clauses: Vec<WhereClause> = Vec::new();
 
     for clause in clauses {
         match &clause {
@@ -142,6 +183,7 @@ pub fn plan(
                 patterns.push((clause, hint));
             }
             WhereClause::Expr { .. } => exprs.push(clause),
+            WhereClause::Not(_) | WhereClause::NotJoin { .. } => not_clauses.push(clause),
             // Other variants must not be passed to plan(); silently skip.
             _ => {}
         }
@@ -193,7 +235,52 @@ pub fn plan(
         result.insert(insert_pos, (expr_clause, None));
     }
 
-    result
+    // Sort not/not-join clauses cheapest-first — tie-break for clauses that land at
+    // the same insertion point, mirroring the executor's previous post-filter ordering.
+    #[cfg(not(feature = "wasm"))]
+    not_clauses.sort_by_key(clause_cost);
+
+    let mut deferred: Vec<WhereClause> = Vec::new();
+    for nc in not_clauses {
+        let required: std::collections::HashSet<String> = match &nc {
+            WhereClause::Not(body) => clause_ref_vars(body),
+            WhereClause::NotJoin { join_vars, .. } => join_vars
+                .iter()
+                .filter(|v| !v.starts_with("?_"))
+                .cloned()
+                .collect(),
+            // Unreachable: only Not/NotJoin are pushed into not_clauses above.
+            _ => Default::default(),
+        };
+
+        if required.is_empty() {
+            // No dependency on any binding — safe to run before everything else.
+            result.insert(0, (nc, None));
+            continue;
+        }
+
+        let mut bound: std::collections::HashSet<String> = Default::default();
+        let mut insert_pos: Option<usize> = None;
+        for (pos, (clause, _)) in result.iter().enumerate() {
+            if let WhereClause::Pattern(p) = clause {
+                bound.extend(pattern_bound_vars(p));
+                if required.is_subset(&bound) {
+                    insert_pos = Some(pos + 1);
+                    break;
+                }
+            }
+        }
+
+        match insert_pos {
+            Some(pos) => result.insert(pos, (nc, None)),
+            // Required variables are never fully bound by these patterns alone — the
+            // clause depends on a binding source outside this plan (e.g. Or/OrJoin).
+            // Defer to the executor's post-filter, which runs after that dependency.
+            None => deferred.push(nc),
+        }
+    }
+
+    (result, deferred)
 }
 
 /// Static 4-tier cardinality estimate for a single pattern.
@@ -341,7 +428,7 @@ mod tests {
         let p2 = make_pattern(entity_lit(), kw(":name"), var("v")); // selectivity 2 (entity + attr)
         let p1_attr = p1.attribute.clone();
         let p2_attr = p2.attribute.clone();
-        let planned = plan(
+        let (planned, _deferred) = plan(
             vec![WhereClause::Pattern(p1), WhereClause::Pattern(p2)],
             &Indexes::new(),
         );
@@ -425,7 +512,7 @@ mod tests {
         {
             use crate::storage::index::Indexes;
             let p = WhereClause::Pattern(make_pattern(var("e"), kw(":val"), var("v")));
-            let planned = plan(vec![p], &Indexes::new());
+            let (planned, _deferred) = plan(vec![p], &Indexes::new());
             assert!(
                 planned[0].1.is_some(),
                 "Pattern entry must carry Some(IndexHint)"
@@ -443,7 +530,7 @@ mod tests {
                 expr: Expr::Lit(Value::Boolean(true)),
                 binding: None,
             };
-            let planned = plan(vec![p, expr], &Indexes::new());
+            let (planned, _deferred) = plan(vec![p, expr], &Indexes::new());
             let expr_entry = planned
                 .iter()
                 .find(|(c, _)| matches!(c, WhereClause::Expr { .. }));
@@ -473,7 +560,7 @@ mod tests {
             ),
             binding: None,
         };
-        let planned = plan(vec![p1, p2, p3, expr], &Indexes::new());
+        let (planned, _deferred) = plan(vec![p1, p2, p3, expr], &Indexes::new());
         assert_eq!(planned.len(), 4);
         // Item at index 2 must be the Expr (pushed after p2 which binds ?v at index 1).
         assert!(
@@ -496,7 +583,7 @@ mod tests {
             expr: Expr::Lit(Value::Boolean(true)),
             binding: None,
         };
-        let planned = plan(vec![p1, expr], &Indexes::new());
+        let (planned, _deferred) = plan(vec![p1, expr], &Indexes::new());
         assert_eq!(planned.len(), 2);
         assert!(
             matches!(planned[1].0, WhereClause::Expr { .. }),
@@ -518,11 +605,122 @@ mod tests {
             ),
             binding: None,
         };
-        let planned = plan(vec![p1, expr], &Indexes::new());
+        let (planned, _deferred) = plan(vec![p1, expr], &Indexes::new());
         assert_eq!(planned.len(), 2);
         assert!(
             matches!(planned[1].0, WhereClause::Expr { .. }),
             "Expr with unbound var must be last"
+        );
+    }
+
+    // ── Not/NotJoin push-down (#248) ─────────────────────────────────────
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_not_pushed_after_binding_pattern() {
+        use crate::storage::index::Indexes;
+        // p1 binds ?e/?n, p2 binds ?e/?v. Not body needs ?v, bound at p2 (pos 1).
+        // Expected: [p1, p2, not, p3].
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":name"), var("n")));
+        let p2 = WhereClause::Pattern(make_pattern(var("e"), kw(":val"), var("v")));
+        let p3 = WhereClause::Pattern(make_pattern(var("e"), kw(":dept"), var("d")));
+        let not_clause = WhereClause::Not(vec![WhereClause::Pattern(make_pattern(
+            var("v"),
+            kw(":flag"),
+            EdnValue::Boolean(true),
+        ))]);
+        let (planned, deferred) = plan(vec![p1, p2, p3, not_clause], &Indexes::new());
+        assert_eq!(planned.len(), 4);
+        assert!(deferred.is_empty(), "not clause must be placeable");
+        assert!(
+            matches!(planned[2].0, WhereClause::Not(_)),
+            "Not must be at index 2, right after the pattern binding ?v"
+        );
+        assert!(
+            matches!(planned[3].0, WhereClause::Pattern(_)),
+            "p3 must be pushed after the not clause"
+        );
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_not_with_unbound_var_is_deferred() {
+        use crate::storage::index::Indexes;
+        // Not body references ?z, which no pattern in this list ever binds
+        // (e.g. it's bound only by an Or clause the executor applies afterward).
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":name"), var("n")));
+        let not_clause = WhereClause::Not(vec![WhereClause::Pattern(make_pattern(
+            var("z"),
+            kw(":flag"),
+            EdnValue::Boolean(true),
+        ))]);
+        let (planned, deferred) = plan(vec![p1, not_clause.clone()], &Indexes::new());
+        assert_eq!(planned.len(), 1, "unplaceable not clause must not appear in planned list");
+        assert_eq!(deferred.len(), 1, "unplaceable not clause must be deferred");
+        assert_eq!(deferred[0], not_clause);
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_not_join_pushed_to_correct_position() {
+        use crate::storage::index::Indexes;
+        // not-join requires only ?e bound (join_vars), which p1 binds at pos 0.
+        // A local existential ?x inside the body is NOT required from the outer scope.
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":name"), var("n")));
+        let p2 = WhereClause::Pattern(make_pattern(var("e"), kw(":val"), var("v")));
+        let nj = WhereClause::NotJoin {
+            join_vars: vec!["?e".to_string()],
+            clauses: vec![WhereClause::Pattern(make_pattern(
+                var("e"),
+                kw(":blocked-by"),
+                var("x"),
+            ))],
+        };
+        let (planned, deferred) = plan(vec![p1, p2, nj], &Indexes::new());
+        assert_eq!(planned.len(), 3);
+        assert!(deferred.is_empty());
+        assert!(
+            matches!(planned[1].0, WhereClause::NotJoin { .. }),
+            "NotJoin must be placed right after the pattern binding ?e (index 0)"
+        );
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_not_join_unbound_join_var_is_deferred() {
+        use crate::storage::index::Indexes;
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":name"), var("n")));
+        let nj = WhereClause::NotJoin {
+            join_vars: vec!["?missing".to_string()],
+            clauses: vec![WhereClause::Pattern(make_pattern(
+                var("missing"),
+                kw(":blocked-by"),
+                var("x"),
+            ))],
+        };
+        let (planned, deferred) = plan(vec![p1, nj], &Indexes::new());
+        assert_eq!(planned.len(), 1);
+        assert_eq!(deferred.len(), 1, "not-join with unbound join var must be deferred");
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    #[test]
+    fn test_not_with_no_required_vars_goes_first() {
+        use crate::storage::index::Indexes;
+        // Not body is fully self-contained (no outer vars referenced) — safe to run
+        // before every pattern.
+        let p1 = WhereClause::Pattern(make_pattern(var("e"), kw(":name"), var("n")));
+        let not_clause = WhereClause::Not(vec![WhereClause::Pattern(make_pattern(
+            entity_lit(),
+            kw(":flag"),
+            EdnValue::Boolean(true),
+        ))]);
+        let (planned, deferred) = plan(vec![p1, not_clause], &Indexes::new());
+        assert_eq!(planned.len(), 2);
+        assert!(deferred.is_empty());
+        assert!(
+            matches!(planned[0].0, WhereClause::Not(_)),
+            "Not clause with no required vars must be placed first"
         );
     }
 

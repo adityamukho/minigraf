@@ -815,6 +815,39 @@ fn bench_negation(c: &mut Criterion) {
         group.finish();
     }
 
+    // not/pushdown_selectivity: fixed 10k DB with three extra joins (:x/:y/:z) after
+    // the `not` clause. Vary the excluded fraction to show how much intermediate
+    // binding-set size the #248 push-down avoids carrying through those joins.
+    {
+        let mut group = c.benchmark_group("negation/not_pushdown_selectivity");
+        group.sample_size(10);
+        let n = 10_000;
+        for &(label, pct) in &[
+            ("excl_0pct", 0usize),
+            ("excl_25pct", 25),
+            ("excl_50pct", 50),
+            ("excl_75pct", 75),
+            ("excl_100pct", 100),
+        ] {
+            let excluded = n * pct / 100;
+            group.bench_with_input(
+                BenchmarkId::from_parameter(label),
+                &excluded,
+                |b, &excluded| {
+                    let db = helpers::populate_with_not_pushdown(n, excluded);
+                    b.iter(|| {
+                        db.execute(
+                            "(query [:find ?e :where [?e :val ?v] (not [?e :banned true]) \
+                             [?e :x true] [?e :y true] [?e :z true]])",
+                        )
+                        .unwrap()
+                    });
+                },
+            );
+        }
+        group.finish();
+    }
+
     // not/rule_body: `not` inside a rule body (StratifiedEvaluator overhead).
     // Rule: `(eligible ?x) :- [?x :val ?v] (not [?x :blocked true])`
     // 10% of entities are blocked.
@@ -969,6 +1002,49 @@ fn bench_disjunction(c: &mut Criterion) {
                     db.execute(
                         "(query [:find ?e :where [?e :val ?v] \
                          (or [?e :tag-a true] [?e :tag-b true])])",
+                    )
+                    .unwrap()
+                });
+            });
+        }
+        group.finish();
+    }
+
+    // or/short_circuit: both branches fully cover every entity (tag-a and tag-b are
+    // both present on all `n` entities), so branch 1 alone already satisfies every
+    // incoming binding. Pre-#250 this always evaluates and hash-joins branch 2 as
+    // well; post-#250 it's skipped once branch 1's coverage is complete.
+    {
+        let mut group = c.benchmark_group("disjunction/or_short_circuit");
+        group.sample_size(10);
+        group.warm_up_time(std::time::Duration::from_millis(500));
+        for &(label, n) in SCALES {
+            group.bench_with_input(BenchmarkId::from_parameter(label), &n, |b, &n| {
+                let db = helpers::populate_with_or_tags(n, n, n);
+                b.iter(|| {
+                    db.execute(
+                        "(query [:find ?e :where [?e :val ?v] \
+                         (or [?e :tag-a true] [?e :tag-b true])])",
+                    )
+                    .unwrap()
+                });
+            });
+        }
+        group.finish();
+    }
+
+    // or-join/short_circuit: same fully-covering setup, using `or-join`.
+    {
+        let mut group = c.benchmark_group("disjunction/or_join_short_circuit");
+        group.sample_size(10);
+        group.warm_up_time(std::time::Duration::from_millis(500));
+        for &(label, n) in SCALES {
+            group.bench_with_input(BenchmarkId::from_parameter(label), &n, |b, &n| {
+                let db = helpers::populate_with_or_tags(n, n, n);
+                b.iter(|| {
+                    db.execute(
+                        "(query [:find ?e :where [?e :val ?v] \
+                         (or-join [?e] [?e :tag-a true] [?e :tag-b true])])",
                     )
                     .unwrap()
                 });
