@@ -28,7 +28,8 @@ jobs:
       - name: Build the pid_ns_helper example used by lock tests
         # cargo-llvm-cov's instrumented build places test binaries under a
         # build-script-shaped path (target/llvm-cov-target/debug/build/...),
-        # so docker_lock_test.rs's `examples/`-relative-to-test-binary lookup
+        # so the lock tests' `examples/`-relative-to-test-binary lookup
+        # (docker_lock_test.rs, nfs_lock_test.rs, pid_namespace_test.rs)
         # never finds the helper. Same workaround as coverage.yml's
         # tarpaulin job: build it into a target dir cargo-llvm-cov never
         # touches and point the tests at it directly.

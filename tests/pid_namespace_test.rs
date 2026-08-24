@@ -90,7 +90,16 @@ fn spawn_in_namespace(
 }
 
 /// Path to the compiled helper binary (see `examples/pid_ns_helper.rs`).
+///
+/// `MINIGRAF_PID_NS_HELPER`, if set, is used as-is -- needed under
+/// `cargo-llvm-cov`, whose instrumented build places test binaries under a
+/// build-script-shaped path instead of `target/debug/deps/`, breaking the
+/// relative lookup below. See `tests/docker_lock_test.rs::helper_binary` for
+/// the same pattern.
 fn helper_binary() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("MINIGRAF_PID_NS_HELPER") {
+        return std::path::PathBuf::from(path);
+    }
     // target/debug/examples/pid_ns_helper, resolved relative to the test binary
     // at target/debug/deps/pid_namespace_test-<hash>.
     let mut dir = std::env::current_exe().expect("test binary path");
