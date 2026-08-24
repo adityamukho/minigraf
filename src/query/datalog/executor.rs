@@ -1174,11 +1174,7 @@ fn apply_not_join_clause(
                 }
                 let mut key: Vec<(String, Value)> = key_vars
                     .iter()
-                    .filter_map(|v| {
-                        binding
-                            .get(v)
-                            .map(|val| (v.clone(), normalize_value(val)))
-                    })
+                    .filter_map(|v| binding.get(v).map(|val| (v.clone(), normalize_value(val))))
                     .collect();
                 key.sort_unstable_by(|a, b| a.0.cmp(&b.0));
                 if key.len() == key_vars.len() {
@@ -1187,7 +1183,13 @@ fn apply_not_join_clause(
                 // Outer binding underspecified relative to the not-join body — fall
                 // back to the slow path so the body is correctly evaluated.
             }
-            !evaluate_not_join(join_vars, nj_clauses, binding, filtered_facts.clone(), registry)
+            !evaluate_not_join(
+                join_vars,
+                nj_clauses,
+                binding,
+                filtered_facts.clone(),
+                registry,
+            )
         })
         .collect()
 }

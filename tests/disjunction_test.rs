@@ -537,10 +537,8 @@ fn test_or_short_circuits_pure_filter_when_fully_covered() {
     })
     .unwrap();
 
-    db.execute(
-        r#"(transact [[:e1 :status :active] [:e2 :status :active] [:e3 :flag true]])"#,
-    )
-    .unwrap();
+    db.execute(r#"(transact [[:e1 :status :active] [:e2 :status :active] [:e3 :flag true]])"#)
+        .unwrap();
 
     let r = db
         .execute(

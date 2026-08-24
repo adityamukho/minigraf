@@ -655,7 +655,11 @@ mod tests {
             EdnValue::Boolean(true),
         ))]);
         let (planned, deferred) = plan(vec![p1, not_clause.clone()], &Indexes::new());
-        assert_eq!(planned.len(), 1, "unplaceable not clause must not appear in planned list");
+        assert_eq!(
+            planned.len(),
+            1,
+            "unplaceable not clause must not appear in planned list"
+        );
         assert_eq!(deferred.len(), 1, "unplaceable not clause must be deferred");
         assert_eq!(deferred[0], not_clause);
     }
@@ -700,7 +704,11 @@ mod tests {
         };
         let (planned, deferred) = plan(vec![p1, nj], &Indexes::new());
         assert_eq!(planned.len(), 1);
-        assert_eq!(deferred.len(), 1, "not-join with unbound join var must be deferred");
+        assert_eq!(
+            deferred.len(),
+            1,
+            "not-join with unbound join var must be deferred"
+        );
     }
 
     #[cfg(not(feature = "wasm"))]
