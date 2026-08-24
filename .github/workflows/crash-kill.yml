@@ -1,0 +1,83 @@
+name: SIGKILL crash-safety fuzz (nightly)
+
+# #308: an abrupt kill landing mid-checkpoint had a ~26% chance of leaving
+# the header on disk with a bumped page_count but a stale checksum --
+# permanent corruption with no recovery path. The bug was in the ordering
+# of our own synchronous write calls, not any OS-specific durability
+# boundary, so it affected every platform equally; this runs the full
+# matrix rather than Linux only. tests/crash_kill_test.rs runs a small
+# smoke count in the per-PR suite (rust.yml, already cross-platform); this
+# workflow runs a much larger round count nightly for statistical
+# confidence on each OS.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  crash-kill:
+    name: SIGKILL fuzz suite
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the SIGKILL crash-safety fuzz suite
+        shell: bash
+        env:
+          MINIGRAF_CRASH_KILL_ROUNDS: "100"
+          RUST_BACKTRACE: 1
+        run: |
+          set -o pipefail
+          cargo test --test crash_kill_test -- --nocapture 2>&1 | tee crash-kill-output.txt
+
+      - name: Record SIGKILL crash-safety failure
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Nightly SIGKILL crash-safety failure (${{ matrix.os }})"
+        run: |
+          report_file="crash-kill-failure.md"
+          {
+            echo "The nightly SIGKILL crash-safety fuzz suite failed on ${{ matrix.os }}."
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Reproduce: cargo test --test crash_kill_test -- --nocapture"
+            echo "  (set MINIGRAF_CRASH_KILL_ROUNDS to raise the round count)"
+            echo
+            echo "## Test output"
+            echo
+            echo '```text'
+            tail -n 1000 crash-kill-output.txt
+            echo '```'
+          } > "$report_file"
+
+          existing_issue="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$ISSUE_TITLE in:title" \
+            --json number,title \
+            --limit 100 \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
+            | head -n 1)"
+
+          if [ -n "$existing_issue" ]; then
+            gh issue comment "$existing_issue" --repo "$GITHUB_REPOSITORY" --body-file "$report_file"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$report_file"
+          fi

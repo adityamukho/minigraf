@@ -377,10 +377,22 @@ impl StorageBackend for FileBackend {
             // Page 0 is the header itself, parse it to update our cached copy
             self.header = FileHeader::from_bytes(data)?;
         } else if page_id >= self.header.page_count {
-            // Update page count if this is a new page (but not page 0)
+            // Bump and persist the page count so a plain reopen (no
+            // deliberate commit in between) still sees pages written this
+            // session -- callers like `test_file_backend_persistence`
+            // depend on that. #308: the bug here was writing the bumped
+            // page_count with a *stale* header_checksum left over from the
+            // last real commit, so a crash before that commit finished left
+            // a permanently checksum-invalid header with no recovery path.
+            // The fix is to recompute the checksum over the whole header
+            // every time, so the on-disk header is self-consistent at
+            // every single-page write, not just at the deliberate commits
+            // in `PersistentFactStorage::save`.
             self.header.page_count = page_id
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("page_count overflow for page_id {}", page_id))?;
+            self.header.header_checksum =
+                crate::storage::persistent_facts::compute_header_checksum(&self.header);
             Self::write_header(&mut self.file, &self.header)?;
         }
 
@@ -458,6 +470,43 @@ mod tests {
         drop(first);
         // Once the only handle is dropped, the kernel releases the lock.
         FileBackend::open(&temp_path).unwrap();
+    }
+
+    /// #308: whenever `write_page` bumps `page_count` for a newly appended
+    /// page (exactly what `save()`/`checkpoint()` do for every fact and
+    /// index page, ahead of the deliberate final header commit), the header
+    /// it persists to disk must have a `header_checksum` matching its own
+    /// content. Before this fix, the page_count byte moved but the checksum
+    /// was left stale from the last real commit -- a `SIGKILL` landing in
+    /// that window (which fires on nearly every appended page) left a
+    /// permanently checksum-invalid header with no recovery path.
+    #[test]
+    fn test_write_page_keeps_disk_header_checksum_consistent_on_page_count_bump() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_header_atomicity.graph");
+        let mut backend = FileBackend::open(&path).unwrap();
+
+        // Append a page well beyond the current page_count (1) -- exactly
+        // the pattern save()/checkpoint() use when writing fact and index
+        // pages ahead of the final atomic header commit.
+        let page_data = vec![0xABu8; PAGE_SIZE];
+        backend.write_page(5, &page_data).unwrap();
+
+        // Read back through the same handle rather than opening the path
+        // independently: `backend` still holds the file lock, and Windows
+        // (unlike Unix) refuses a second, unrelated open of a locked file
+        // even from the same process.
+        let raw = backend.read_page(0).unwrap();
+        let on_disk = FileHeader::from_bytes(&raw).unwrap();
+        let computed = crate::storage::persistent_facts::compute_header_checksum(&on_disk);
+        assert_eq!(
+            on_disk.header_checksum, computed,
+            "on-disk header checksum must match its own content after a page-count bump"
+        );
+        assert_eq!(on_disk.page_count, 6);
+
+        // In-memory bookkeeping must agree with what's now on disk.
+        assert_eq!(backend.page_count().unwrap(), 6);
     }
 
     /// The child half of [`test_cross_process_lock_retries_then_fails_within_budget`]:
