@@ -994,7 +994,7 @@ fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     let first_element = &elements[0];
 
     // Check if the first element is a map (transaction-level options)
-    let (tx_valid_from, tx_valid_to, facts_element) = if first_element.is_map() {
+    let (tx_valid_from, tx_valid_to, facts_element, consumed) = if first_element.is_map() {
         let map = first_element.as_map().ok_or_else(|| {
             "internal error: is_map() true but as_map() returned None".to_string()
         })?;
@@ -1002,10 +1002,19 @@ fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
         let facts_elem = elements.get(1).ok_or_else(|| {
             "Transact with options requires a facts vector after the map".to_string()
         })?;
-        (from, to, facts_elem)
+        (from, to, facts_elem, 2)
     } else {
-        (None, None, first_element)
+        (None, None, first_element, 1)
     };
+
+    if elements.len() > consumed {
+        return Err(format!(
+            "transact takes (transact [facts]) or (transact {{opts}} [facts]); found {} \
+             unexpected trailing argument(s) — the valid-time options map must come BEFORE \
+             the facts vector, not after",
+            elements.len() - consumed
+        ));
+    }
 
     let facts_vector = facts_element
         .as_vector()
@@ -1120,6 +1129,13 @@ fn parse_retract(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     // Same structure as transact
     if elements.is_empty() {
         return Err("Retract requires a vector of facts".to_string());
+    }
+
+    if elements.len() > 1 {
+        return Err(format!(
+            "retract takes (retract [facts]); found {} unexpected trailing argument(s)",
+            elements.len() - 1
+        ));
     }
 
     // SAFETY: is_empty() check above guarantees index 0 exists
@@ -2418,6 +2434,40 @@ mod tests {
         assert_eq!(tx.facts.len(), 2);
         assert!(tx.valid_from.is_none());
         assert!(tx.valid_to.is_none());
+    }
+
+    #[test]
+    fn test_parse_transact_rejects_options_map_after_facts() {
+        // The valid-time options map must come BEFORE the facts vector:
+        // (transact {opts} [facts]). Putting it after — (transact [facts] {opts}) —
+        // must be a hard parse error, not a silent no-op that drops :valid-from.
+        let result = parse_datalog_command(
+            r#"(transact [[:alice :employment/status :active]] {:valid-from "2023-01-01"})"#,
+        );
+        assert!(result.is_err(), "expected a parse error");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unexpected") || msg.contains("trailing"),
+            "error should mention the unexpected trailing argument, was: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_transact_rejects_extra_trailing_argument() {
+        // Trailing garbage after (transact {opts} [facts]) must also be rejected.
+        let result = parse_datalog_command(
+            r#"(transact {:valid-from "2023-01-01"} [[:alice :employment/status :active]] :bogus)"#,
+        );
+        assert!(result.is_err(), "expected a parse error");
+    }
+
+    #[test]
+    fn test_parse_retract_rejects_extra_trailing_argument() {
+        let result = parse_datalog_command(
+            r#"(retract [[:alice :employment/status :active]] {:valid-from "2023-01-01"})"#,
+        );
+        assert!(result.is_err(), "expected a parse error");
     }
 
     #[test]
