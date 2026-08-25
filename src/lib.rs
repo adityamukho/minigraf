@@ -75,7 +75,7 @@
 //! - **WASI / server-side** (`wasm32-wasip1`) — `cargo build --target wasm32-wasip1 --release --bin minigraf`
 
 pub mod db;
-pub(crate) mod error;
+pub mod error;
 pub(crate) mod graph;
 pub(crate) mod query;
 /// Interactive REPL for exploring a [`Minigraf`] database from the command line.
@@ -91,6 +91,7 @@ pub mod browser;
 #[cfg(not(target_arch = "wasm32"))]
 pub use db::OpenOptionsWithPath;
 pub use db::{Minigraf, OpenOptions, SyncMode, WriteTransaction};
+pub use error::{ErrorCategory, MinigrafError};
 pub use repl::Repl;
 
 // EAV value types — users construct and match on these

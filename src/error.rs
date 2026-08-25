@@ -8,11 +8,17 @@ use std::fmt;
 /// Coarse-grained error category — the type library consumers match on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCategory {
+    /// Datalog/EDN syntax errors (`PRS-` codes).
     Parser,
+    /// Query planning/execution errors (`QRY-` codes).
     Query,
+    /// On-disk storage/file-format errors (`STG-` codes).
     Storage,
+    /// Write-ahead log errors (`WAL-` codes).
     Wal,
+    /// Public `Minigraf` API misuse or internal sequencing errors (`API-` codes).
     Api,
+    /// Unclassified internal invariant violations (`INT-` codes).
     Internal,
 }
 
@@ -298,5 +304,64 @@ mod tests {
         let e: MinigrafError = anyhow_err.into();
         let err: &dyn std::error::Error = &e;
         assert!(err.source().is_some());
+    }
+
+    /// `docs/ERROR_REFERENCE.md` already documents all 130 codes (from #192)
+    /// before #277 starts touching runtime codes — the doc isn't built up
+    /// incrementally alongside `REGISTRY`, it's already complete. So this
+    /// test can only check `REGISTRY` is a content-matched subset of the
+    /// doc (every registry entry's code+template appears in the doc
+    /// verbatim) — not that every documented code has a registry entry yet.
+    /// A documented code with no registry entry just means that call site
+    /// hasn't been migrated. The final category PR (once every remaining
+    /// call site is audited and coded) should upgrade this to a full
+    /// bidirectional equality check.
+    #[test]
+    fn registry_is_a_subset_of_error_reference_doc() {
+        let doc = include_str!("../docs/ERROR_REFERENCE.md");
+        let mut doc_entries: std::collections::HashMap<String, String> = Default::default();
+        let mut lines = doc.lines().peekable();
+        while let Some(line) = lines.next() {
+            let Some(rest) = line.strip_prefix("### ") else {
+                continue;
+            };
+            let code = rest.split_whitespace().next().unwrap_or("").to_string();
+            if !is_error_reference_code(&code) {
+                continue;
+            }
+            let mut error_text = None;
+            while let Some(&next_line) = lines.peek() {
+                if next_line.starts_with("### ") || next_line.starts_with("## ") {
+                    break;
+                }
+                if let Some(text) = next_line.strip_prefix("**Error text**: `") {
+                    error_text = text.strip_suffix('`').map(str::to_string);
+                    lines.next();
+                    break;
+                }
+                lines.next();
+            }
+            if let Some(text) = error_text {
+                doc_entries.insert(code, text);
+            }
+        }
+
+        for (_, code_str, template, _) in REGISTRY {
+            match doc_entries.get(*code_str) {
+                Some(doc_text) => assert_eq!(
+                    doc_text, template,
+                    "REGISTRY template for a documented code doesn't match its ERROR_REFERENCE.md Error text"
+                ),
+                None => panic!("REGISTRY has a code with no ERROR_REFERENCE.md entry at all"),
+            }
+        }
+    }
+
+    fn is_error_reference_code(s: &str) -> bool {
+        let bytes = s.as_bytes();
+        bytes.len() == 7
+            && bytes[..3].iter().all(u8::is_ascii_uppercase)
+            && bytes[3] == b'-'
+            && bytes[4..].iter().all(u8::is_ascii_digit)
     }
 }
