@@ -91,6 +91,11 @@ appear in runtime output today — runtime codes are tracked in
 | PRS-072 | Invalid UUID | Parser |
 | PRS-073 | Unknown tagged literal | Parser |
 | PRS-074 | Bind slot name exceeds maximum length | Parser |
+| PRS-075 | Transact rejects unexpected trailing argument(s) | Parser |
+| PRS-076 | Retract rejects unexpected trailing argument(s) | Parser |
+| PRS-077 | Unexpected trailing input after a complete form | Parser |
+| PRS-078 | Query rejects unexpected trailing argument(s) | Parser |
+| PRS-079 | Rule rejects unexpected trailing argument(s) | Parser |
 | QRY-001 | Invalid entity | Query Execution |
 | QRY-002 | Attribute must be a keyword | Query Execution |
 | QRY-003 | Cannot transact a pseudo-attribute | Query Execution |
@@ -1378,6 +1383,87 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 $<4097-char-slot-name>
 ```
 *Shorten the bind slot name; `$name` is sufficient for most use cases*
+
+### PRS-075 Transact rejects unexpected trailing argument(s)
+
+**Error text**: `transact takes (transact [facts]) or (transact {opts} [facts]); found N unexpected trailing argument(s) — the valid-time options map must come BEFORE the facts vector, not after`
+
+**Cause**: `(transact ...)` was called with more top-level arguments than it accepts — either extra tokens after the facts vector, or the valid-time options map placed after the facts vector instead of before it. Earlier parser versions silently dropped these extra arguments (and any `:valid-from`/`:valid-to` in a misplaced map); this is now a hard error.
+
+**Resolution**:
+- Use exactly one of `(transact [facts])` or `(transact {:valid-from "..." :valid-to "..."} [facts])`.
+- If you meant to set valid-time options, move the map before the facts vector.
+- Remove any stray trailing tokens.
+
+**Example**:
+```datalog
+(transact [[:alice :employment/status :active]] {:valid-from "2023-01-01"})
+```
+*The options map comes after the facts vector; move it before: `(transact {:valid-from "2023-01-01"} [[:alice :employment/status :active]])`*
+
+### PRS-076 Retract rejects unexpected trailing argument(s)
+
+**Error text**: `retract takes (retract [facts]); found N unexpected trailing argument(s)`
+
+**Cause**: `(retract ...)` was called with more than one top-level argument. `retract` only accepts a single facts vector — unlike `transact`, it does not accept a leading options map.
+
+**Resolution**:
+- Use exactly `(retract [facts])`.
+- Remove any trailing tokens after the facts vector.
+
+**Example**:
+```datalog
+(retract [[:alice :employment/status :active]] {:valid-from "2023-01-01"})
+```
+*`retract` takes only a facts vector; drop the trailing map*
+
+### PRS-077 Unexpected trailing input after a complete form
+
+**Error text**: `unexpected trailing input after a complete form: {token}`
+
+**Cause**: The top-level input contains a syntactically complete EDN form (e.g. a fully closed list or vector) followed by additional tokens. Earlier parser versions silently stopped after the first complete form instead of rejecting the extra input.
+
+**Resolution**:
+- Ensure the input contains exactly one top-level form.
+- Remove any text, delimiters, or extra forms following the first complete form.
+
+**Example**:
+```datalog
+(query [:find ?e :where [?e :entity-type :type/commit]]) garbage-trailing-tokens
+```
+*Only one top-level form is allowed; remove everything after the closing `)`*
+
+### PRS-078 Query rejects unexpected trailing argument(s)
+
+**Error text**: `query takes (query [...]); found N unexpected trailing argument(s)`
+
+**Cause**: `(query ...)` was called with more than one top-level argument. All query options (`:find`, `:where`, `:as-of`, `:max-results`, etc.) must appear as keywords *inside* the query vector, not as sibling arguments after it. Earlier parser versions silently dropped these trailing arguments.
+
+**Resolution**:
+- Put every query option inside the single query vector: `(query [:find ?e :where [...] :max-results 5])`.
+- Remove any arguments after the closing `]` of the query vector.
+
+**Example**:
+```datalog
+(query [:find ?e :where [?e :a :b]] :max-results 5)
+```
+*`:max-results 5` must be inside the vector: `(query [:find ?e :where [?e :a :b] :max-results 5])`*
+
+### PRS-079 Rule rejects unexpected trailing argument(s)
+
+**Error text**: `rule takes (rule [...]); found N unexpected trailing argument(s)`
+
+**Cause**: `(rule ...)` was called with more than one top-level argument. A rule definition is a single vector containing the rule head and body patterns; nothing may follow it.
+
+**Resolution**:
+- Keep the rule head and all body patterns inside one vector: `(rule [(reachable ?a ?b) [?a :edge ?b]])`.
+- Remove any arguments after the closing `]` of the rule vector.
+
+**Example**:
+```datalog
+(rule [(reachable ?a ?b) [?a :edge ?b]] :unexpected-extra)
+```
+*Nothing may follow the rule vector; remove `:unexpected-extra`*
 
 ---
 
