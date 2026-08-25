@@ -89,7 +89,9 @@ pub mod browser;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use db::OpenOptionsWithPath;
-pub use db::{Minigraf, OpenOptions, WriteTransaction};
+/// Re-exported at the crate root alongside [`OpenOptions`] so
+/// `minigraf::SyncMode` is reachable without importing `minigraf::db`.
+pub use db::{Minigraf, OpenOptions, SyncMode, WriteTransaction};
 pub use repl::Repl;
 
 // EAV value types — users construct and match on these
