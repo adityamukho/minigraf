@@ -33,6 +33,7 @@
 //!
 //! Phase 6.1 uses these only for save/load. In-memory BTreeMaps handle queries.
 
+use crate::error::{ErrorCode, bail_coded};
 use anyhow::Result;
 use std::collections::BTreeMap;
 
@@ -169,7 +170,7 @@ fn read_blob(backend: &dyn StorageBackend, start_page_id: u64) -> Result<Vec<u8>
             anyhow::anyhow!("btree read_blob: page index 0 out of bounds (page {page_id})")
         })?;
         if page_byte != PAGE_TYPE_INDEX {
-            anyhow::bail!("Expected index page at page {}", page_id);
+            bail_coded!(ErrorCode::Stg012, page_id);
         }
         let chunk_len = u32::from_le_bytes(
             page.get(5..9)
@@ -423,5 +424,34 @@ mod tests {
         assert_eq!(orig_keys, rec_keys, "Sort order must be preserved");
         // Ensure the return value is sane.
         assert!(root >= 2);
+    }
+
+    // ══ #359: STG-012 regression test ═════════════════════════════════════
+
+    /// A non-first page of a multi-page index blob whose type byte has been
+    /// corrupted (page found is not `PAGE_TYPE_INDEX`) must surface as the
+    /// coded STG-012, not a generic error.
+    #[test]
+    fn read_blob_corrupted_non_first_page_returns_stg_012() {
+        let mut backend = MemoryBackend::new();
+        let mut map = BTreeMap::new();
+        // Enough entries to span at least 2 pages (see
+        // test_large_eavt_roundtrip_multi_leaf above).
+        for i in 0u128..150 {
+            let (k, v) = eavt_entry(i, ":attr", i as u64 + 1);
+            map.insert(k, v);
+        }
+        let next = write_eavt_index(&map, &mut backend, 1).unwrap();
+        assert!(next > 2, "150 entries must span multiple pages");
+
+        // Corrupt page 2's type byte (the second page of the blob starting
+        // at page 1) so it no longer reads as PAGE_TYPE_INDEX.
+        let mut corrupt_page = backend.read_page(2).unwrap();
+        corrupt_page[0] = 0x00;
+        backend.write_page(2, &corrupt_page).unwrap();
+
+        let err = read_eavt_index(1, &backend).expect_err("corrupted page must fail to read");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-012");
     }
 }

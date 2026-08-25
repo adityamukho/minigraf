@@ -1,4 +1,5 @@
 /// File-based storage backend for native platforms.
+use crate::error::{ErrorCode, bail_coded};
 use crate::storage::{FileHeader, PAGE_SIZE, StorageBackend};
 use anyhow::Result;
 use std::fs::{File, OpenOptions};
@@ -236,32 +237,13 @@ impl FileBackend {
                 PathGuard(Some(canonical))
             }
             LockOutcome::Held if already_open_here(&canonical) => {
-                anyhow::bail!(
-                    "Database is already open in this process ({}). A second handle \
-                     on one file would give each its own page table and corrupt both \
-                     — reuse the existing handle instead. `Minigraf` is cheap to clone \
-                     and all clones share the same database.",
-                    path.display()
-                );
+                bail_coded!(ErrorCode::Stg025, path.display());
             }
             LockOutcome::Held => {
-                anyhow::bail!(
-                    "Database is locked by another process ({}). The lock is held on \
-                     the file itself and is released automatically when the holding \
-                     process exits, so there is no lock file to clean up.",
-                    path.display()
-                );
+                bail_coded!(ErrorCode::Stg026, path.display());
             }
             LockOutcome::Unsupported(e) => {
-                anyhow::bail!(
-                    "Failed to lock database at {}: {}. This filesystem does not \
-                     support file locking (common on NFSv3 without lockd, and on some \
-                     FUSE mounts). Set `allow_unlocked` in `OpenOptions` to open \
-                     anyway — that accepts the risk that concurrent writers corrupt \
-                     the file.",
-                    path.display(),
-                    e
-                );
+                bail_coded!(ErrorCode::Stg027, path.display(), e);
             }
             LockOutcome::ProceedUnlocked => {
                 // There is no kernel lock in this arm, so the registry is not
@@ -271,13 +253,7 @@ impl FileBackend {
                 // path. See `claim_unlocked_path` for why the check and
                 // insert must be one atomic operation.
                 if !claim_unlocked_path(&canonical) {
-                    anyhow::bail!(
-                        "Database is already open in this process ({}). A second handle \
-                         on one file would give each its own page table and corrupt both \
-                         — reuse the existing handle instead. `Minigraf` is cheap to clone \
-                         and all clones share the same database.",
-                        path.display()
-                    );
+                    bail_coded!(ErrorCode::Stg025, path.display());
                 }
                 PathGuard(Some(canonical))
             }
@@ -295,12 +271,17 @@ impl FileBackend {
             match Self::read_header(&mut file) {
                 Ok(header) => header,
                 Err(e) => {
-                    // File has content but header is invalid - this is a real error
-                    anyhow::bail!(
-                        "Failed to read header from existing file (size={}): {}",
-                        file_len,
-                        e
-                    );
+                    // File has content but header is invalid - this is a real error.
+                    // If `e` already carries a more specific code (e.g. STG-002 for a
+                    // bad magic number, raised inside `FileHeader::from_bytes`/
+                    // `validate`), propagate it as-is rather than burying it under
+                    // the generic STG-010 label — `read_header` never wraps with
+                    // `.context()`, so a coded error from deeper down comes back
+                    // here unmodified and downcasts directly.
+                    if e.downcast_ref::<crate::error::CodedError>().is_some() {
+                        return Err(e);
+                    }
+                    bail_coded!(ErrorCode::Stg010, e);
                 }
             }
         } else {
@@ -603,11 +584,20 @@ mod tests {
         let result = FileBackend::open(&db_path);
         let elapsed = start.elapsed();
 
-        // (a) a real cross-process lock is still refused.
-        let msg = match result {
+        // (a) a real cross-process lock is still refused, with the coded
+        // STG-026 error (#359).
+        let (msg, code) = match result {
             Ok(_) => panic!("a genuinely cross-process lock must be refused"),
-            Err(e) => e.to_string(),
+            Err(e) => {
+                let msg = e.to_string();
+                let code = crate::error::MinigrafError::from(e).code().to_string();
+                (msg, code)
+            }
         };
+        assert_eq!(
+            code, "STG-026",
+            "cross-process lock conflict must be STG-026"
+        );
 
         // (b) the retry budget is bounded: this must fail in roughly the
         // ~375ms budget, NOT hang for the holder's full 3s hold. The 2s bound

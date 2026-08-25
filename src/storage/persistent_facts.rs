@@ -1,3 +1,4 @@
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::FactStorage;
 /// Persistent fact storage that integrates StorageBackend with Datalog facts.
 ///
@@ -84,7 +85,7 @@ impl<B: StorageBackend + 'static> crate::storage::CommittedFactReader
         let backend = self
             .backend
             .lock()
-            .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Stg016))?;
         crate::storage::packed_pages::read_all_from_pages(&*backend, 1, n)
     }
 
@@ -183,7 +184,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let b = persistent
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             (b.is_new(), b.page_count()?)
         };
         if !is_new_backend || page_count > 1 {
@@ -208,7 +209,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let backend = self
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             let header_page = backend.read_page(0)?;
             let h = FileHeader::from_bytes(&header_page)?;
             h.validate()?;
@@ -285,7 +286,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let backend = self
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             let stored = header.index_checksum;
             // Total data pages: pages 1 through page_count-1 (everything except header)
             let total_data_pages = header.page_count.saturating_sub(1);
@@ -324,7 +325,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
                 let backend = self
                     .backend
                     .lock()
-                    .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                    .map_err(|_| err_coded!(ErrorCode::Stg016))?;
                 crate::storage::packed_pages::read_all_from_pages(&*backend, 1, num_fact_pages)?
             };
             // Re-pack to derive correct FactRefs (same deterministic layout as on disk)
@@ -341,11 +342,11 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             // Build v6 B+tree indexes directly
             let index_start = 1u64
                 .checked_add(num_fact_pages)
-                .ok_or_else(|| anyhow::anyhow!("page count overflow computing index_start"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Stg017))?;
             let mut backend = self
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             let (eavt_root, next1) = build_btree(
                 btree_entries(eavt_entries.into_iter())?.into_iter(),
                 &mut *backend,
@@ -416,7 +417,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
                 let backend = self
                     .backend
                     .lock()
-                    .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                    .map_err(|_| err_coded!(ErrorCode::Stg016))?;
                 let current_header_bytes = backend.read_page(0)?;
                 let current_header = FileHeader::from_bytes(&current_header_bytes)?;
                 let computed = compute_header_checksum_from_bytes(&current_header_bytes);
@@ -453,7 +454,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         let backend = self
             .backend
             .lock()
-            .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Stg016))?;
         let mut loaded: usize = 0;
         let mut skipped: usize = 0;
         for page_id in 1..page_count {
@@ -499,7 +500,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         let backend = self
             .backend
             .lock()
-            .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Stg016))?;
         let header_page = backend.read_page(0)?;
         let header = FileHeader::from_bytes(&header_page)?;
         let page_count = header.page_count;
@@ -594,7 +595,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let backend = self
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             // Just verify we can read the page - actual validation happens via checksum
             if backend.read_page(1).is_ok() {
                 num_fact_pages
@@ -618,7 +619,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let backend = self
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             let total_data_pages = header.page_count.saturating_sub(1);
             let full = compute_page_checksum(&*backend, 1, total_data_pages)?;
             if full == header.index_checksum {
@@ -634,7 +635,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let backend = self
                 .backend
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?;
             let e = if header.eavt_root_page > 0 {
                 read_eavt_index(header.eavt_root_page, &*backend)?
             } else {
@@ -662,7 +663,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
                 let backend = self
                     .backend
                     .lock()
-                    .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+                    .map_err(|_| err_coded!(ErrorCode::Stg016))?;
                 crate::storage::packed_pages::read_all_from_pages(
                     &*backend,
                     1,
@@ -675,8 +676,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             let mut avet_map = std::collections::BTreeMap::new();
             let mut vaet_map = std::collections::BTreeMap::new();
             for (i, fact) in all_facts.iter().enumerate() {
-                let slot_index = u16::try_from(i)
-                    .map_err(|_| anyhow::anyhow!("fact index {i} exceeds u16::MAX"))?;
+                let slot_index = u16::try_from(i).map_err(|_| err_coded!(ErrorCode::Stg020, i))?;
                 let fr = FactRef {
                     page_id: 1,
                     slot_index,
@@ -732,7 +732,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         let mut backend = self
             .backend
             .lock()
-            .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Stg016))?;
         // Use the actual end of fact pages as the start for new index pages, NOT
         // header.page_count — that field comes from the (possibly untrusted) file
         // on disk and may be a huge fuzz-crafted value that causes build_btree to
@@ -740,7 +740,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         // over billions of pages.
         let next_free = 1u64
             .checked_add(validated_num_fact_pages)
-            .ok_or_else(|| anyhow::anyhow!("page count overflow computing next_free"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Stg018))?;
 
         let (eavt_root, next_free2) = build_btree(
             btree_entries(eavt.into_iter())?.into_iter(),
@@ -837,7 +837,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         match Arc::try_unwrap(backend_arc) {
             Ok(mutex) => Ok(mutex
                 .into_inner()
-                .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?),
+                .map_err(|_| err_coded!(ErrorCode::Stg016))?),
             Err(_) => Err(anyhow::anyhow!(
                 "into_backend: backend Arc has multiple owners"
             )),
@@ -855,17 +855,17 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         let mut backend = self
             .backend
             .lock()
-            .map_err(|_| anyhow::anyhow!("backend mutex poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Stg016))?;
 
         let old_fact_page_count = self.committed_fact_pages.load(Ordering::SeqCst);
         let new_fact_start = 1u64
             .checked_add(old_fact_page_count)
-            .ok_or_else(|| anyhow::anyhow!("page count overflow computing new_fact_start"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Stg019))?;
 
         let curr_header = match backend.read_page(0) {
             Ok(bytes) => FileHeader::from_bytes(&bytes)?,
             Err(_) if backend.is_new() => FileHeader::new(),
-            Err(e) => anyhow::bail!("Failed to read header from existing file: {}", e),
+            Err(e) => bail_coded!(ErrorCode::Stg010, e),
         };
 
         // Stream committed B+tree entries BEFORE writing new pages that may overlap
@@ -896,11 +896,10 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         // ── Step B: pack pending facts as new appended pages ────────────────────
         let (new_pages, new_fact_refs) = pack_facts(&pending_facts, new_fact_start)?;
         for (i, page_data) in new_pages.iter().enumerate() {
-            let page_offset =
-                u64::try_from(i).map_err(|_| anyhow::anyhow!("page index {i} exceeds u64::MAX"))?;
+            let page_offset = u64::try_from(i).map_err(|_| err_coded!(ErrorCode::Stg023, i))?;
             let page_id = new_fact_start
                 .checked_add(page_offset)
-                .ok_or_else(|| anyhow::anyhow!("page id overflow writing fact pages"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Stg022))?;
             backend.write_page(page_id, page_data)?;
         }
         let new_pages_len = u64::try_from(new_pages.len())
@@ -921,7 +920,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         // ── Step D: merge committed + pending entries, build new B+trees ─────────
         let index_start = 1u64
             .checked_add(new_total_fact_pages)
-            .ok_or_else(|| anyhow::anyhow!("page count overflow computing index_start"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Stg017))?;
 
         let eavt_ser = if !committed_eavt.is_empty() {
             btree_entries(merge_sorted_vecs(committed_eavt, pending_eavt))?
@@ -973,8 +972,8 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         // ── Step E: write header (last write = crash-safe boundary) ─────────────
         let mut header = FileHeader::new(); // version=7
         header.page_count = next4;
-        let pending_len = u64::try_from(pending_facts.len())
-            .map_err(|_| anyhow::anyhow!("pending fact count exceeds u64::MAX"))?;
+        let pending_len =
+            u64::try_from(pending_facts.len()).map_err(|_| err_coded!(ErrorCode::Stg024))?;
         header.node_count = curr_header
             .node_count
             .checked_add(pending_len)
@@ -1114,7 +1113,7 @@ fn compute_page_checksum(
     for i in 0..num_pages {
         let page_id = first_page
             .checked_add(i)
-            .ok_or_else(|| anyhow::anyhow!("page id overflow in checksum computation"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Stg021))?;
         let page = backend.read_page(page_id)?;
         hasher.update(&page);
     }
@@ -2168,6 +2167,111 @@ mod tests {
         let backend = FileBackend::open(&path).unwrap();
         assert!(!backend.is_new(), "reopened file should not be new");
         drop(backend);
+    }
+
+    // ══ #359: STG-0xx regression tests ═══════════════════════════════════
+
+    /// A poisoned backend mutex (a previous operation panicked while
+    /// holding the lock) must surface as the coded STG-016, not a generic
+    /// error.
+    #[test]
+    fn save_with_poisoned_backend_mutex_returns_stg_016() {
+        let mut pfs = PersistentFactStorage::new(MemoryBackend::new(), 16).unwrap();
+        let alice = Uuid::new_v4();
+        pfs.storage()
+            .transact(
+                vec![(
+                    alice,
+                    ":name".to_string(),
+                    Value::String("Alice".to_string()),
+                )],
+                None,
+            )
+            .unwrap();
+        pfs.mark_dirty();
+
+        // Poison the backend mutex by panicking while holding it.
+        let backend = pfs.backend.clone();
+        let handle = std::thread::spawn(move || {
+            let _guard = backend.lock().unwrap();
+            panic!("deliberate poison for STG-016 regression test");
+        });
+        let _ = handle.join();
+
+        let err = pfs
+            .save()
+            .expect_err("save on a poisoned backend mutex must fail");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-016");
+        assert_eq!(coded.category(), crate::error::ErrorCategory::Storage);
+    }
+
+    /// A backend that reports an existing (non-new) file but then fails to
+    /// re-read the header at `save()` time (e.g. a transient disk I/O
+    /// error) must surface as the coded STG-010, not a generic error.
+    /// `read_page(0)` is allowed to succeed exactly once, so `load()` (run
+    /// from `PersistentFactStorage::new()`, since `is_new()` is false)
+    /// completes normally; the failure is injected only for the *second*
+    /// `read_page(0)` call, which `save()` makes.
+    struct FlakyHeaderBackend {
+        inner: MemoryBackend,
+        read_page_0_calls: std::sync::atomic::AtomicU32,
+    }
+
+    impl StorageBackend for FlakyHeaderBackend {
+        fn write_page(&mut self, page_id: u64, data: &[u8]) -> Result<()> {
+            self.inner.write_page(page_id, data)
+        }
+        fn read_page(&self, page_id: u64) -> Result<Vec<u8>> {
+            if page_id == 0 {
+                let calls = self
+                    .read_page_0_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if calls >= 1 {
+                    anyhow::bail!("simulated disk read failure");
+                }
+            }
+            self.inner.read_page(page_id)
+        }
+        fn sync(&mut self) -> Result<()> {
+            self.inner.sync()
+        }
+        fn page_count(&self) -> Result<u64> {
+            self.inner.page_count()
+        }
+        fn close(&mut self) -> Result<()> {
+            self.inner.close()
+        }
+        fn backend_name(&self) -> &'static str {
+            "flaky-header-test"
+        }
+        fn is_new(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn save_with_unreadable_existing_header_returns_stg_010() {
+        let mut inner = MemoryBackend::new();
+        // A valid, empty v7 header so `load()` (triggered by `is_new() ==
+        // false`) succeeds cleanly on the first `read_page(0)` call.
+        let mut header_page = FileHeader::new().to_bytes();
+        header_page.resize(PAGE_SIZE, 0);
+        inner.write_page(0, &header_page).unwrap();
+
+        let backend = FlakyHeaderBackend {
+            inner,
+            read_page_0_calls: std::sync::atomic::AtomicU32::new(0),
+        };
+        let mut pfs = PersistentFactStorage::new(backend, 16).unwrap();
+        pfs.mark_dirty();
+
+        let err = pfs
+            .save()
+            .expect_err("save must fail when the header becomes unreadable");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-010");
+        assert_eq!(coded.category(), crate::error::ErrorCategory::Storage);
     }
 
     // ══ #214 fault-injection unit tests ══════════════════════════════════

@@ -36,6 +36,33 @@ pub enum ErrorCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCode {
     Int000,
+    Stg001,
+    Stg002,
+    Stg003,
+    Stg004,
+    Stg005,
+    Stg006,
+    Stg007,
+    Stg008,
+    Stg009,
+    Stg010,
+    Stg011,
+    Stg012,
+    Stg013,
+    Stg014,
+    Stg015,
+    Stg016,
+    Stg017,
+    Stg018,
+    Stg019,
+    Stg020,
+    Stg021,
+    Stg022,
+    Stg023,
+    Stg024,
+    Stg025,
+    Stg026,
+    Stg027,
 }
 
 /// Single source of truth: (code, code string, message template, category).
@@ -43,12 +70,176 @@ pub(crate) enum ErrorCode {
 /// The message template is verified against `docs/ERROR_REFERENCE.md`'s
 /// "Error text" lines by the sync test in this module (added once real
 /// codes exist in a follow-up category PR — see the design spec).
-pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[(
-    ErrorCode::Int000,
-    "INT-000",
-    "unclassified internal error: {}",
-    ErrorCategory::Internal,
-)];
+pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
+    (
+        ErrorCode::Int000,
+        "INT-000",
+        "unclassified internal error: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Stg001,
+        "STG-001",
+        "Invalid header: too short (got {} bytes, need 64)",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg002,
+        "STG-002",
+        "Invalid magic number: not a .graph file",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg003,
+        "STG-003",
+        "Invalid v4/v5/v6 header: expected at least 72 bytes, got {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg004,
+        "STG-004",
+        "Invalid v6 header: expected 80 bytes, got {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg005,
+        "STG-005",
+        "Invalid v7 header: expected 84 bytes, got {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg006,
+        "STG-006",
+        "Unsupported format version: {} (supported: 1-{})",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg007,
+        "STG-007",
+        "page_count must be greater than 0",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg008,
+        "STG-008",
+        "eavt_root_page ({}) must be less than page_count ({})",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg009,
+        "STG-009",
+        "fact_page_count ({}) cannot exceed page_count ({})",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg010,
+        "STG-010",
+        "Failed to read header from existing file: {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg011,
+        "STG-011",
+        "internal page has no children",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg012,
+        "STG-012",
+        "Expected index page at page {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg013,
+        "STG-013",
+        "range_scan: expected leaf at page_id={}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg014,
+        "STG-014",
+        "Expected packed page (0x02), got 0x{}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg015,
+        "STG-015",
+        "Record at slot {} extends beyond page boundary",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg016,
+        "STG-016",
+        "backend mutex poisoned",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg017,
+        "STG-017",
+        "page count overflow computing index_start",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg018,
+        "STG-018",
+        "page count overflow computing next_free",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg019,
+        "STG-019",
+        "page count overflow computing new_fact_start",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg020,
+        "STG-020",
+        "fact index {} exceeds u16::MAX",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg021,
+        "STG-021",
+        "page id overflow in checksum computation",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg022,
+        "STG-022",
+        "page id overflow writing fact pages",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg023,
+        "STG-023",
+        "page index {} exceeds u64::MAX",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg024,
+        "STG-024",
+        "pending fact count exceeds u64::MAX",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg025,
+        "STG-025",
+        "Database is already open in this process ({}). A second handle on one file would give each its own page table and corrupt both — reuse the existing handle instead. `Minigraf` is cheap to clone and all clones share the same database.",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg026,
+        "STG-026",
+        "Database is locked by another process ({}). The lock is held on the file itself and is released automatically when the holding process exits, so there is no lock file to clean up.",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg027,
+        "STG-027",
+        "Failed to lock database at {}: {}. This filesystem does not support file locking (common on NFSv3 without lockd, and on some FUSE mounts). Set `allow_unlocked` in `OpenOptions` to open anyway — that accepts the risk that concurrent writers corrupt the file.",
+        ErrorCategory::Storage,
+    ),
+];
 
 pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, ErrorCategory) {
     let entry = REGISTRY.iter().find(|(c, ..)| *c == code);
@@ -79,7 +270,6 @@ pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, Er
 ///
 /// Not `std::fmt`-based: the template is runtime data pulled from [`REGISTRY`],
 /// and `format!` requires a compile-time string literal.
-#[allow(dead_code)] // unused until the PRS category PR wires up real call sites
 pub(crate) fn format_template(template: &str, args: &[&dyn fmt::Display]) -> String {
     let placeholder_count = template.matches("{}").count();
     debug_assert_eq!(
@@ -115,7 +305,6 @@ pub(crate) struct CodedError {
 }
 
 impl CodedError {
-    #[allow(dead_code)] // unused until the PRS category PR wires up real call sites
     pub(crate) fn new(code: ErrorCode, args: &[&dyn fmt::Display]) -> Self {
         let (_, template, _) = registry_entry(code);
         CodedError {
@@ -142,7 +331,6 @@ impl std::error::Error for CodedError {}
 /// `bail_coded!(ErrorCode::Prs001)` for a static message, or
 /// `bail_coded!(ErrorCode::Prs002, ch)` to fill the template's `{}`
 /// placeholders positionally. A drop-in replacement for `anyhow::bail!`.
-#[allow(unused_macros)] // unused until the PRS category PR wires up real call sites
 macro_rules! bail_coded {
     ($code:expr $(,)?) => {
         return Err(::anyhow::Error::new($crate::error::CodedError::new($code, &[])))
@@ -159,7 +347,6 @@ macro_rules! bail_coded {
 ///
 /// For use where an `anyhow::Error` value is needed directly, e.g.
 /// `.ok_or_else(|| err_coded!(ErrorCode::Api009))`.
-#[allow(unused_macros)] // unused until the PRS category PR wires up real call sites
 macro_rules! err_coded {
     ($code:expr $(,)?) => {
         ::anyhow::Error::new($crate::error::CodedError::new($code, &[]))
@@ -172,9 +359,7 @@ macro_rules! err_coded {
     };
 }
 
-#[allow(unused_imports)] // unused until the PRS category PR wires up real call sites
 pub(crate) use bail_coded;
-#[allow(unused_imports)] // unused until the PRS category PR wires up real call sites
 pub(crate) use err_coded;
 
 /// The error type returned from Minigraf's public API.
@@ -280,9 +465,7 @@ mod tests {
     /// error — the real exhaustiveness guarantee `registry_entry`'s
     /// `debug_assert!` cannot provide on its own (it's compiled out in
     /// release builds, and `registry_is_a_subset_of_error_reference_doc`
-    /// only walks `REGISTRY`, not `ErrorCode`). Necessarily small today
-    /// since `ErrorCode` has just one variant, but the structure is what
-    /// matters for the PRS category PR that adds ~79 more.
+    /// only walks `REGISTRY`, not `ErrorCode`).
     #[test]
     fn every_error_code_variant_has_a_registry_entry() {
         fn assert_has_registry_entry(code: ErrorCode) {
@@ -297,8 +480,73 @@ mod tests {
             );
         }
 
-        match ErrorCode::Int000 {
-            ErrorCode::Int000 => assert_has_registry_entry(ErrorCode::Int000),
+        // No `_` arm: adding a new `ErrorCode` variant without listing it
+        // here is a compile error, which is the actual exhaustiveness
+        // guarantee this test provides.
+        fn exhaustive(code: ErrorCode) {
+            match code {
+                ErrorCode::Int000
+                | ErrorCode::Stg001
+                | ErrorCode::Stg002
+                | ErrorCode::Stg003
+                | ErrorCode::Stg004
+                | ErrorCode::Stg005
+                | ErrorCode::Stg006
+                | ErrorCode::Stg007
+                | ErrorCode::Stg008
+                | ErrorCode::Stg009
+                | ErrorCode::Stg010
+                | ErrorCode::Stg011
+                | ErrorCode::Stg012
+                | ErrorCode::Stg013
+                | ErrorCode::Stg014
+                | ErrorCode::Stg015
+                | ErrorCode::Stg016
+                | ErrorCode::Stg017
+                | ErrorCode::Stg018
+                | ErrorCode::Stg019
+                | ErrorCode::Stg020
+                | ErrorCode::Stg021
+                | ErrorCode::Stg022
+                | ErrorCode::Stg023
+                | ErrorCode::Stg024
+                | ErrorCode::Stg025
+                | ErrorCode::Stg026
+                | ErrorCode::Stg027 => assert_has_registry_entry(code),
+            }
+        }
+
+        for code in [
+            ErrorCode::Int000,
+            ErrorCode::Stg001,
+            ErrorCode::Stg002,
+            ErrorCode::Stg003,
+            ErrorCode::Stg004,
+            ErrorCode::Stg005,
+            ErrorCode::Stg006,
+            ErrorCode::Stg007,
+            ErrorCode::Stg008,
+            ErrorCode::Stg009,
+            ErrorCode::Stg010,
+            ErrorCode::Stg011,
+            ErrorCode::Stg012,
+            ErrorCode::Stg013,
+            ErrorCode::Stg014,
+            ErrorCode::Stg015,
+            ErrorCode::Stg016,
+            ErrorCode::Stg017,
+            ErrorCode::Stg018,
+            ErrorCode::Stg019,
+            ErrorCode::Stg020,
+            ErrorCode::Stg021,
+            ErrorCode::Stg022,
+            ErrorCode::Stg023,
+            ErrorCode::Stg024,
+            ErrorCode::Stg025,
+            ErrorCode::Stg026,
+            ErrorCode::Stg027,
+        ] {
+            exhaustive(code);
         }
     }
 
