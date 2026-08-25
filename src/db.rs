@@ -1152,7 +1152,7 @@ impl<'a> WriteTransaction<'a> {
     /// # Errors
     ///
     /// Returns an error if the WAL write or fact application fails.
-    pub fn commit(mut self) -> Result<(), MinigrafError> {
+    pub fn commit(self) -> Result<(), MinigrafError> {
         self.commit_inner().map_err(MinigrafError::from)
     }
 
