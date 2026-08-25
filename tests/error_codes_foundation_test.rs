@@ -60,3 +60,13 @@ fn prepare_and_register_predicate_return_ok() {
     });
     assert!(registered.is_ok(), "registering a new predicate name should succeed");
 }
+
+#[test]
+fn write_transaction_execute_and_commit_return_ok() {
+    let db = Minigraf::in_memory().unwrap();
+    let mut tx = db.begin_write().unwrap();
+    let exec = tx.execute(r#"(transact [[#uuid "550e8400-e29b-41d4-a716-446655440001" :name "bob"]])"#);
+    assert!(exec.is_ok(), "staging a valid transact in a tx should succeed");
+    let commit = tx.commit();
+    assert!(commit.is_ok(), "committing a valid transaction should succeed");
+}

@@ -1062,7 +1062,11 @@ impl<'a> WriteTransaction<'a> {
     /// # Errors
     ///
     /// Returns an error if parsing or execution fails.
-    pub fn execute(&mut self, input: &str) -> Result<QueryResult> {
+    pub fn execute(&mut self, input: &str) -> Result<QueryResult, MinigrafError> {
+        self.execute_inner(input).map_err(MinigrafError::from)
+    }
+
+    fn execute_inner(&mut self, input: &str) -> Result<QueryResult> {
         let cmd = parse_datalog_command(input).map_err(|e| anyhow::anyhow!("{}", e))?;
 
         match cmd {
@@ -1148,7 +1152,11 @@ impl<'a> WriteTransaction<'a> {
     /// # Errors
     ///
     /// Returns an error if the WAL write or fact application fails.
-    pub fn commit(mut self) -> Result<()> {
+    pub fn commit(mut self) -> Result<(), MinigrafError> {
+        self.commit_inner().map_err(MinigrafError::from)
+    }
+
+    fn commit_inner(mut self) -> Result<()> {
         let facts_to_commit = std::mem::take(&mut self.pending_facts);
 
         if !facts_to_commit.is_empty() {
