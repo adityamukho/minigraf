@@ -143,6 +143,66 @@ macro_rules! err_coded {
 pub(crate) use bail_coded;
 pub(crate) use err_coded;
 
+/// The error type returned from Minigraf's public API.
+///
+/// Carries a matchable [`category`](MinigrafError::category) and a stable
+/// [`code`](MinigrafError::code) (e.g. `"PRS-001"`) documented in
+/// `docs/ERROR_REFERENCE.md`. `Display` renders as `[CODE] message`.
+#[derive(Debug)]
+pub struct MinigrafError {
+    category: ErrorCategory,
+    code: &'static str,
+    message: String,
+    source: anyhow::Error,
+}
+
+impl MinigrafError {
+    /// The coarse-grained category — the type to `match` on.
+    pub fn category(&self) -> ErrorCategory {
+        self.category
+    }
+
+    /// The stable reference code, e.g. `"PRS-001"`. See `docs/ERROR_REFERENCE.md`.
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl fmt::Display for MinigrafError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for MinigrafError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+impl From<anyhow::Error> for MinigrafError {
+    fn from(err: anyhow::Error) -> Self {
+        for cause in err.chain() {
+            if let Some(coded) = cause.downcast_ref::<CodedError>() {
+                let (code_str, _, category) = registry_entry(coded.code());
+                return MinigrafError {
+                    category,
+                    code: code_str,
+                    message: coded.to_string(),
+                    source: err,
+                };
+            }
+        }
+        let message = err.to_string();
+        MinigrafError {
+            category: ErrorCategory::Internal,
+            code: "INT-000",
+            message,
+            source: err,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +264,39 @@ mod tests {
         let err = err_coded!(ErrorCode::Int000, "boom");
         let coded = err.downcast_ref::<CodedError>().expect("expected a CodedError");
         assert_eq!(coded.code(), ErrorCode::Int000);
+    }
+
+    #[test]
+    fn minigraf_error_display_format() {
+        let anyhow_err = err_coded!(ErrorCode::Int000, "boom");
+        let e: MinigrafError = anyhow_err.into();
+        assert_eq!(e.to_string(), "[INT-000] unclassified internal error: boom");
+        assert_eq!(e.code(), "INT-000");
+        assert_eq!(e.category(), ErrorCategory::Internal);
+    }
+
+    #[test]
+    fn minigraf_error_finds_coded_error_through_context_chain() {
+        let anyhow_err = err_coded!(ErrorCode::Int000, "boom").context("extra context");
+        let e: MinigrafError = anyhow_err.into();
+        assert_eq!(e.code(), "INT-000");
+        assert_eq!(e.to_string(), "[INT-000] unclassified internal error: boom");
+    }
+
+    #[test]
+    fn minigraf_error_falls_back_to_int000_for_uncoded_anyhow_error() {
+        let anyhow_err = anyhow::anyhow!("plain uncoded error");
+        let e: MinigrafError = anyhow_err.into();
+        assert_eq!(e.code(), "INT-000");
+        assert_eq!(e.category(), ErrorCategory::Internal);
+        assert_eq!(e.to_string(), "[INT-000] plain uncoded error");
+    }
+
+    #[test]
+    fn minigraf_error_implements_std_error_source() {
+        let anyhow_err = err_coded!(ErrorCode::Int000, "boom");
+        let e: MinigrafError = anyhow_err.into();
+        let err: &dyn std::error::Error = &e;
+        assert!(err.source().is_some());
     }
 }
