@@ -478,11 +478,19 @@ EOF
 
 - [ ] **Step 1: Export the new types from `lib.rs`**
 
-In `src/lib.rs`, add `pub mod error;` next to the other `pub mod` declarations (near line 77's `pub mod db;`), and add to the `pub use` block (near line 91-92):
+Task 1's implementer already added `pub(crate) mod error;` to `src/lib.rs` — necessary for `cargo test --lib error::` to compile/run at all in Task 1, since a source file isn't part of the crate tree until some reachable `mod` declares it; the original brief didn't anticipate this. Ruling recorded in the SDD ledger (Task 1 review). Do not insert a second `mod error;` line — that's a duplicate-declaration compile error. Instead, change the existing line's visibility:
+
+```rust
+pub(crate) mod error;
+```
+
+to:
 
 ```rust
 pub mod error;
 ```
+
+And add to the `pub use` block (near line 91-92):
 
 ```rust
 pub use error::{ErrorCategory, MinigrafError};
