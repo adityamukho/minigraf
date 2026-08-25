@@ -70,3 +70,16 @@ fn write_transaction_execute_and_commit_return_ok() {
     let commit = tx.commit();
     assert!(commit.is_ok(), "committing a valid transaction should succeed");
 }
+
+#[test]
+fn prepared_query_execute_returns_ok() {
+    use minigraf::{BindValue, Value};
+
+    let db = Minigraf::in_memory().unwrap();
+    db.execute(r#"(transact [[:carol :person/name "Carol"]])"#).unwrap();
+    let prepared = db
+        .prepare("(query [:find ?e :where [?e :person/name $name]])")
+        .unwrap();
+    let result = prepared.execute(&[("name", BindValue::Val(Value::String("Carol".to_string())))]);
+    assert!(result.is_ok(), "executing a prepared query with a valid binding should succeed");
+}
