@@ -156,10 +156,9 @@ are added incrementally in the follow-up PRs.
 A test (likely in `tests/` or a `#[cfg(test)]` module in `error.rs`) parses
 `ERROR_REFERENCE.md`: the Quick Reference Table for the code list, and each
 `### CODE title` section's "**Error text**: \`...\`" line for message text.
-It asserts, in both directions, that every documented code has a `REGISTRY`
-entry and vice versa, **and** that each entry's message template matches its
-doc section's "Error text" verbatim. This is a real content check, not just
-a code-list check — it catches a template edit that forgot the doc (or vice
+It asserts that each `REGISTRY` entry's message template matches its doc
+section's "Error text" verbatim. This is a real content check, not just a
+code-list check — it catches a template edit that forgot the doc (or vice
 versa). During migration, existing "Error text" lines that currently show a
 concrete example value (e.g. `` `Unexpected character: @` ``) get rewritten
 to the canonical `{}`-placeholder template form (`` `unexpected character:
@@ -167,6 +166,18 @@ to the canonical `{}`-placeholder template form (`` `unexpected character:
 can still live in the entry's existing "Example" section below. INT codes
 also get their normal `ERROR_REFERENCE.md` entries (a new `## INT — Internal
 Errors` section), so the test's coverage is uniform across all 6 categories.
+
+**Directionality note**: `ERROR_REFERENCE.md` already documents all 130
+codes (from #192) before #277 starts — the doc is not built incrementally
+alongside the registry, it's already complete. So the test can only be
+`REGISTRY ⊆ doc` (every registry entry's code+template appears in the doc,
+content-matched) during the foundation PR and each intermediate category
+PR — a documented code with no registry entry yet just means that call site
+hasn't been migrated. The final category PR (API+INT, step 6 of the
+phasing below, once every remaining call site has been audited and given a
+code) upgrades the assertion to full bidirectional equality (`REGISTRY ==
+doc`), which is when "codes remain in sync" becomes a complete two-way
+guarantee rather than a one-way drift check on already-migrated codes.
 
 ## Public API changes
 
