@@ -72,6 +72,77 @@ pub(crate) fn format_template(template: &str, args: &[&dyn fmt::Display]) -> Str
     out
 }
 
+/// An `anyhow`-compatible error carrying a compile-time-checked [`ErrorCode`].
+///
+/// Built exclusively through [`bail_coded!`]/[`err_coded!`] and wrapped as an
+/// `anyhow::Error`, so it rides through the crate's existing `anyhow::Result`
+/// plumbing (`?`, `.context()`) unchanged. Recovered at the public API
+/// boundary by [`MinigrafError::from`]`(anyhow::Error)` walking the error
+/// chain for the first `CodedError` via `downcast_ref`.
+#[derive(Debug)]
+pub(crate) struct CodedError {
+    code: ErrorCode,
+    message: String,
+}
+
+impl CodedError {
+    pub(crate) fn new(code: ErrorCode, args: &[&dyn fmt::Display]) -> Self {
+        let (_, template, _) = registry_entry(code);
+        CodedError {
+            code,
+            message: format_template(template, args),
+        }
+    }
+
+    pub(crate) fn code(&self) -> ErrorCode {
+        self.code
+    }
+}
+
+impl fmt::Display for CodedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CodedError {}
+
+/// Return early with a coded, `anyhow`-compatible error.
+///
+/// `bail_coded!(ErrorCode::Prs001)` for a static message, or
+/// `bail_coded!(ErrorCode::Prs002, ch)` to fill the template's `{}`
+/// placeholders positionally. A drop-in replacement for `anyhow::bail!`.
+macro_rules! bail_coded {
+    ($code:expr $(,)?) => {
+        return Err(::anyhow::Error::new($crate::error::CodedError::new($code, &[])))
+    };
+    ($code:expr, $($arg:expr),+ $(,)?) => {
+        return Err(::anyhow::Error::new($crate::error::CodedError::new(
+            $code,
+            &[$(&$arg as &dyn ::std::fmt::Display),+],
+        )))
+    };
+}
+
+/// Build (without returning) a coded, `anyhow`-compatible error.
+///
+/// For use where an `anyhow::Error` value is needed directly, e.g.
+/// `.ok_or_else(|| err_coded!(ErrorCode::Api009))`.
+macro_rules! err_coded {
+    ($code:expr $(,)?) => {
+        ::anyhow::Error::new($crate::error::CodedError::new($code, &[]))
+    };
+    ($code:expr, $($arg:expr),+ $(,)?) => {
+        ::anyhow::Error::new($crate::error::CodedError::new(
+            $code,
+            &[$(&$arg as &dyn ::std::fmt::Display),+],
+        ))
+    };
+}
+
+pub(crate) use bail_coded;
+pub(crate) use err_coded;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +180,29 @@ mod tests {
         assert_eq!(code_str, "INT-000");
         assert_eq!(template, "unclassified internal error: {}");
         assert_eq!(category, ErrorCategory::Internal);
+    }
+
+    #[test]
+    fn coded_error_display_uses_template() {
+        let e = CodedError::new(ErrorCode::Int000, &[&"boom" as &dyn std::fmt::Display]);
+        assert_eq!(e.to_string(), "unclassified internal error: boom");
+    }
+
+    #[test]
+    fn bail_coded_returns_anyhow_error_wrapping_coded_error() {
+        fn inner() -> anyhow::Result<()> {
+            bail_coded!(ErrorCode::Int000, "boom");
+        }
+        let err = inner().unwrap_err();
+        let coded = err.downcast_ref::<CodedError>().expect("expected a CodedError");
+        assert_eq!(coded.code(), ErrorCode::Int000);
+        assert_eq!(coded.to_string(), "unclassified internal error: boom");
+    }
+
+    #[test]
+    fn err_coded_builds_anyhow_error_without_returning() {
+        let err = err_coded!(ErrorCode::Int000, "boom");
+        let coded = err.downcast_ref::<CodedError>().expect("expected a CodedError");
+        assert_eq!(coded.code(), ErrorCode::Int000);
     }
 }
