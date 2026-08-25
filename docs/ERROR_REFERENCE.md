@@ -1949,7 +1949,7 @@ The WAL is replayed on open and deleted on checkpoint.
 
 ### WAL-002 Unsupported WAL version
 
-**Error text**: `Unsupported WAL version: 3 (expected 2)`
+**Error text**: `Unsupported WAL version: {} (expected {})`
 
 **Cause**: The `.wal` file was written by a version of Minigraf with a different WAL format. This can occur when downgrading the library after a WAL was written by a newer version.
 
@@ -1957,11 +1957,11 @@ The WAL is replayed on open and deleted on checkpoint.
 - Delete the `.wal` file if it is from an incomplete or stale session (no data is lost — committed facts are in the `.graph` file).
 - If the WAL contains uncommitted in-flight data you need to recover, upgrade the library to the version that wrote the WAL before reopening.
 
-**Scenario**: A `.wal` file written by a pre-release version of Minigraf is opened with the stable release, which uses a different WAL version number.
+**Scenario**: A `.wal` file written by a pre-release version of Minigraf is opened with the stable release, which uses a different WAL version number — e.g. `Unsupported WAL version: 3 (expected 2)`.
 
 ### WAL-003 Fact serialised size exceeds maximum
 
-**Error text**: `Fact serialised size 524800 bytes exceeds maximum 524288 bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.`
+**Error text**: `Fact serialised size {} bytes exceeds maximum {} bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.`
 
 **Cause**: A single fact's serialised size exceeds the WAL entry limit (~512 KB). This typically means a `Value::String` attribute value contains very large content such as raw document text, a base64-encoded image, or binary data.
 
@@ -1979,7 +1979,7 @@ The WAL is replayed on open and deleted on checkpoint.
 
 ### WAL-004 Fact serialised size exceeds u32 range
 
-**Error text**: `fact serialised size 4294967297 exceeds u32 range`
+**Error text**: `fact serialised size {} exceeds u32 range`
 
 **Cause**: The serialised size of a single fact exceeds `u32::MAX` (~4 GB). This is practically unreachable — WAL-003's ~512 KB limit fires first.
 
@@ -1987,7 +1987,7 @@ The WAL is replayed on open and deleted on checkpoint.
 - This should not occur under normal operation.
 - If it does, file a bug.
 
-**Scenario**: An extreme edge case where the fact serialisation path bypassed the WAL-003 limit check, producing an impossibly large entry.
+**Scenario**: An extreme edge case where the fact serialisation path bypassed the WAL-003 limit check, producing an impossibly large entry — e.g. `fact serialised size 4294967297 exceeds u32 range`.
 
 ### WAL-005 WAL num_facts exceeds platform usize
 
@@ -2003,7 +2003,7 @@ The WAL is replayed on open and deleted on checkpoint.
 
 ### WAL-006 Failed to delete WAL file
 
-**Error text**: `failed to delete WAL file my-db.wal: permission denied`
+**Error text**: `failed to delete WAL file {}: {}`
 
 **Cause**: After a successful `checkpoint()`, Minigraf could not delete the sidecar `.wal` file. This is typically a file system permissions issue.
 
@@ -2011,7 +2011,7 @@ The WAL is replayed on open and deleted on checkpoint.
 - Check that the process has write access to the directory containing the `.graph` file (WAL deletion requires directory write permission, not just file write permission).
 - The `.wal` file is safe to delete manually — Minigraf will create a new one on the next write.
 
-**Scenario**: `db.checkpoint()` succeeds but the process lacks directory write permission, preventing deletion of `my-db.wal`.
+**Scenario**: `db.checkpoint()` succeeds but the process lacks directory write permission, preventing deletion of `my-db.wal` — e.g. `failed to delete WAL file my-db.wal: permission denied`.
 
 ---
 

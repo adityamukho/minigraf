@@ -45,6 +45,12 @@ pub(crate) enum ErrorCode {
     Qry008,
     Qry009,
     Int000,
+    Wal001,
+    Wal002,
+    Wal003,
+    Wal004,
+    Wal005,
+    Wal006,
 }
 
 /// Single source of truth: (code, code string, message template, category).
@@ -113,6 +119,42 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
         "unclassified internal error: {}",
         ErrorCategory::Internal,
     ),
+    (
+        ErrorCode::Wal001,
+        "WAL-001",
+        "Invalid WAL magic number: not a .wal file",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal002,
+        "WAL-002",
+        "Unsupported WAL version: {} (expected {})",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal003,
+        "WAL-003",
+        "Fact serialised size {} bytes exceeds maximum {} bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal004,
+        "WAL-004",
+        "fact serialised size {} exceeds u32 range",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal005,
+        "WAL-005",
+        "WAL num_facts exceeds platform usize",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal006,
+        "WAL-006",
+        "failed to delete WAL file {}: {}",
+        ErrorCategory::Wal,
+    ),
 ];
 
 pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, ErrorCategory) {
@@ -144,7 +186,6 @@ pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, Er
 ///
 /// Not `std::fmt`-based: the template is runtime data pulled from [`REGISTRY`],
 /// and `format!` requires a compile-time string literal.
-#[allow(dead_code)] // unused until the PRS category PR wires up real call sites
 pub(crate) fn format_template(template: &str, args: &[&dyn fmt::Display]) -> String {
     let placeholder_count = template.matches("{}").count();
     debug_assert_eq!(
@@ -180,7 +221,6 @@ pub(crate) struct CodedError {
 }
 
 impl CodedError {
-    #[allow(dead_code)] // unused until the PRS category PR wires up real call sites
     pub(crate) fn new(code: ErrorCode, args: &[&dyn fmt::Display]) -> Self {
         let (_, template, _) = registry_entry(code);
         CodedError {
@@ -207,7 +247,6 @@ impl std::error::Error for CodedError {}
 /// `bail_coded!(ErrorCode::Prs001)` for a static message, or
 /// `bail_coded!(ErrorCode::Prs002, ch)` to fill the template's `{}`
 /// placeholders positionally. A drop-in replacement for `anyhow::bail!`.
-#[allow(unused_macros)] // unused until the PRS category PR wires up real call sites
 macro_rules! bail_coded {
     ($code:expr $(,)?) => {
         return Err(::anyhow::Error::new($crate::error::CodedError::new($code, &[])))
@@ -224,7 +263,6 @@ macro_rules! bail_coded {
 ///
 /// For use where an `anyhow::Error` value is needed directly, e.g.
 /// `.ok_or_else(|| err_coded!(ErrorCode::Api009))`.
-#[allow(unused_macros)] // unused until the PRS category PR wires up real call sites
 macro_rules! err_coded {
     ($code:expr $(,)?) => {
         ::anyhow::Error::new($crate::error::CodedError::new($code, &[]))
@@ -237,9 +275,7 @@ macro_rules! err_coded {
     };
 }
 
-#[allow(unused_imports)] // unused until the PRS category PR wires up real call sites
 pub(crate) use bail_coded;
-#[allow(unused_imports)] // unused until the PRS category PR wires up real call sites
 pub(crate) use err_coded;
 
 /// The error type returned from Minigraf's public API.
@@ -373,6 +409,12 @@ mod tests {
             ErrorCode::Qry008 => assert_has_registry_entry(ErrorCode::Qry008),
             ErrorCode::Qry009 => assert_has_registry_entry(ErrorCode::Qry009),
             ErrorCode::Int000 => assert_has_registry_entry(ErrorCode::Int000),
+            ErrorCode::Wal001 => assert_has_registry_entry(ErrorCode::Wal001),
+            ErrorCode::Wal002 => assert_has_registry_entry(ErrorCode::Wal002),
+            ErrorCode::Wal003 => assert_has_registry_entry(ErrorCode::Wal003),
+            ErrorCode::Wal004 => assert_has_registry_entry(ErrorCode::Wal004),
+            ErrorCode::Wal005 => assert_has_registry_entry(ErrorCode::Wal005),
+            ErrorCode::Wal006 => assert_has_registry_entry(ErrorCode::Wal006),
         }
     }
 
