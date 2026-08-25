@@ -6,7 +6,12 @@
 use std::fmt;
 
 /// Coarse-grained error category — the type library consumers match on.
+///
+/// `#[non_exhaustive]`: a future category can be added without that being a
+/// breaking change. Downstream `match` expressions must include a wildcard
+/// `_` arm. Has no effect within this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ErrorCategory {
     /// Datalog/EDN syntax errors (`PRS-` codes).
     Parser,
