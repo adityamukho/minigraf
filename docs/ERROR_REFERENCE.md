@@ -2161,12 +2161,13 @@ db.execute("(rule [(ancestor ?x ?y) [?x :parent ?y]])")?;
 
 ## INT — Internal Errors
 
-Internal errors are invariant violations that should not be reachable through
-normal use of the public API. `INT-000` is also the generic catch-all every
-runtime error falls back to until its call site is migrated to a specific
-structured code — see [#277](https://github.com/project-minigraf/minigraf/issues/277).
-If you see one of these in practice, it likely indicates a bug in Minigraf
-itself; please [file an issue](https://github.com/project-minigraf/minigraf/issues).
+`INT-000` is the generic catch-all every runtime error falls back to until its
+call site is migrated to a specific structured code — see
+[#277](https://github.com/project-minigraf/minigraf/issues/277). Internal
+errors are invariant violations that should not be reachable through normal
+use of the public API. If you see one of these in practice, it likely
+indicates a bug in Minigraf itself; please
+[file an issue](https://github.com/project-minigraf/minigraf/issues).
 
 ### INT-000 Unclassified internal error
 
