@@ -67,8 +67,10 @@ project committing to decades-long compatibility.
 ```rust
 pub(crate) enum ErrorCode { Prs001, Prs002, /* ... */ Int001, /* ... */ }
 
-pub(crate) const REGISTRY: &[(ErrorCode, &str, ErrorCategory)] = &[
-    (ErrorCode::Prs001, "PRS-001", ErrorCategory::Parser),
+pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
+    // (code, code string, message template, category)
+    (ErrorCode::Prs001, "PRS-001", "unexpected end of input", ErrorCategory::Parser),
+    (ErrorCode::Prs002, "PRS-002", "unexpected character: {}", ErrorCategory::Parser),
     // ...
 ];
 ```
@@ -77,6 +79,24 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, ErrorCategory)] = &[
 call sites via the macros below. Consumers never see it, only the resulting
 code string, which keeps the enum free to be reorganized without breaking
 downstream `match` statements.
+
+The registry's third field is the **message template** — the single source
+of truth for message text, matched verbatim against `ERROR_REFERENCE.md`'s
+"Error text" (see the sync test below). Call sites never write message text;
+they only supply the values a template interpolates. This is what makes the
+sync test a real content check rather than just a code-list check, and
+guarantees "codes are stable across versions (renaming error text does not
+change the code)" holds in the direction that matters for consumers: editing
+a template requires touching exactly one place, not hunting down every call
+site that used that code.
+
+Templates use `{}` placeholders, filled positionally at runtime by a small
+hand-rolled formatter (`fn format_template(template: &str, args: &[&dyn
+std::fmt::Display]) -> String`, splitting on `{}` and interleaving
+`Display` output — Rust's own `format!` can't be used here since it requires
+a compile-time string literal, and the template is runtime data pulled from
+`REGISTRY`). No proc-macro, no build script — consistent with the Non-goals
+above.
 
 A new sixth category, **INT** (Internal), covers `bail!`/`anyhow!` sites that
 are invariant violations rather than user-actionable errors (e.g. "write
@@ -89,16 +109,23 @@ reclassified as INT during migration). Every `MinigrafError` always has a
 ### Call-site macros
 
 ```rust
-bail_coded!(ErrorCode::Prs001, "unexpected end of input");
-bail_coded!(ErrorCode::Prs002, "unexpected character: {}", ch);
-let e = err_coded!(ErrorCode::Api008, "function registry lock poisoned");
+bail_coded!(ErrorCode::Prs001);
+bail_coded!(ErrorCode::Prs002, ch);
+let e = err_coded!(ErrorCode::Api008);
 ```
 
-Both build a small internal `CodedError { code: ErrorCode, message: String }`
-(implements `std::error::Error`) and wrap it as `anyhow::Error` — a drop-in
-replacement for existing `bail!(...)` / `anyhow!(...)` call sites, minimal
-diff per site, and a compile error if the `ErrorCode` variant doesn't exist.
-Everything downstream of the call site is untouched: functions keep
+Both look up the code's template in `REGISTRY`, format it against the
+supplied args via `format_template`, and build a small internal
+`CodedError { code: ErrorCode, message: String }` (implements
+`std::error::Error`), wrapped as `anyhow::Error` — a drop-in replacement for
+existing `bail!(...)` / `anyhow!(...)` call sites. The diff per site is
+slightly different from a plain `bail!` swap (message text moves out of the
+call site into the registry the first time a code is migrated), but every
+call site after that first migration is just `ErrorCode` + positional args —
+shorter than the `bail!` it replaces. A compile error results if the
+`ErrorCode` variant doesn't exist; a debug-assert (or panic in the formatter)
+catches an arg-count mismatch against the template's `{}` count during
+testing. Everything downstream of the call site is untouched: functions keep
 returning `anyhow::Result<T>`, `?` and `.context()` keep working, and
 `CodedError` rides along in the error chain through however many hops it
 takes to reach the public API boundary.
@@ -113,7 +140,7 @@ Conversion happens once, in a single `From<anyhow::Error> for MinigrafError`
 1. Walk `.chain()` on the incoming `anyhow::Error`.
 2. Find the first `CodedError` via `downcast_ref`.
 3. Look up its code/category in `REGISTRY`.
-4. Build `MinigrafError { category, code, message: CodedError's message, source: original anyhow::Error }`.
+4. Build `MinigrafError { category, code, message: CodedError's already-formatted message, source: original anyhow::Error }`.
 5. If no `CodedError` is found anywhere in the chain (a raw `io::Error` or
    any call site not yet migrated), fall back to `ErrorCategory::Internal` /
    a catch-all `INT-000` code, using the anyhow error's `Display` as the
@@ -127,10 +154,17 @@ are added incrementally in the follow-up PRs.
 ### Registry ↔ doc sync test
 
 A test (likely in `tests/` or a `#[cfg(test)]` module in `error.rs`) parses
-`ERROR_REFERENCE.md`'s Quick Reference Table and asserts its code list
-matches `REGISTRY` exactly in both directions — every documented code has a
-registry entry and vice versa. This is the acceptance criterion "codes
-remain in sync," verified mechanically rather than by convention. INT codes
+`ERROR_REFERENCE.md`: the Quick Reference Table for the code list, and each
+`### CODE title` section's "**Error text**: \`...\`" line for message text.
+It asserts, in both directions, that every documented code has a `REGISTRY`
+entry and vice versa, **and** that each entry's message template matches its
+doc section's "Error text" verbatim. This is a real content check, not just
+a code-list check — it catches a template edit that forgot the doc (or vice
+versa). During migration, existing "Error text" lines that currently show a
+concrete example value (e.g. `` `Unexpected character: @` ``) get rewritten
+to the canonical `{}`-placeholder template form (`` `unexpected character:
+{}` ``) so the two sides can compare byte-for-byte; a worked example instance
+can still live in the entry's existing "Example" section below. INT codes
 also get their normal `ERROR_REFERENCE.md` entries (a new `## INT — Internal
 Errors` section), so the test's coverage is uniform across all 6 categories.
 
@@ -190,9 +224,11 @@ land.
 
 ## Testing strategy
 
-- Foundation PR: unit tests for `MinigrafError::Display` format, boundary
-  conversion (`CodedError` found vs. not found → `INT-000` fallback), and
-  the registry↔doc sync test (passing vacuously until codes are added).
+- Foundation PR: unit tests for `format_template` (arg substitution, and the
+  arg-count-mismatch panic/debug-assert path), `MinigrafError::Display`
+  format, boundary conversion (`CodedError` found vs. not found → `INT-000`
+  fallback), and the registry↔doc sync test (passing vacuously until codes
+  are added).
 - Each category PR: for every migrated call site, a regression test that
   triggers the error condition through the public API and asserts
   `err.code() == "PRS-NNN"` (or equivalent) — not just that an error
@@ -241,3 +277,12 @@ category — every `MinigrafError` always having a code means consumers never
 handle a `None` case, and it forces every error path to eventually get a
 real (if generic) code and doc entry rather than staying permanently
 uncoded.
+
+**Message text hardcoded at each call site** (registry holds only
+code+category, not text): the initial draft of this spec. Rejected on
+review — it left `ERROR_REFERENCE.md` sync as a code-list check only, with
+no mechanism catching drift between a call site's actual wording and its
+documented "Error text." Moving the template into `REGISTRY` costs a small
+hand-rolled runtime formatter (Rust's `format!` needs a compile-time
+literal, which a data-driven template can't supply) but makes the registry
+the true single source of truth the acceptance criteria call for.
