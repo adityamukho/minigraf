@@ -89,7 +89,7 @@ pub mod browser;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use db::OpenOptionsWithPath;
-pub use db::{Minigraf, OpenOptions, WriteTransaction};
+pub use db::{Minigraf, OpenOptions, SyncMode, WriteTransaction};
 pub use repl::Repl;
 
 // EAV value types — users construct and match on these
