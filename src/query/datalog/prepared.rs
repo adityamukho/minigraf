@@ -1,3 +1,4 @@
+use crate::error::MinigrafError;
 use crate::graph::FactStorage;
 use crate::graph::types::Value;
 use crate::query::datalog::executor::{DatalogExecutor, QueryResult};
@@ -6,7 +7,6 @@ use crate::query::datalog::rules::RuleRegistry;
 use crate::query::datalog::types::{
     AsOf, AttributeSpec, DatalogCommand, DatalogQuery, EdnValue, Expr, ValidAt, WhereClause,
 };
-use crate::error::MinigrafError;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};

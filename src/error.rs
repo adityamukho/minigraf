@@ -233,7 +233,10 @@ mod tests {
 
     #[test]
     fn format_template_no_placeholders() {
-        assert_eq!(format_template("no placeholders here", &[]), "no placeholders here");
+        assert_eq!(
+            format_template("no placeholders here", &[]),
+            "no placeholders here"
+        );
     }
 
     #[test]
@@ -278,7 +281,9 @@ mod tests {
             bail_coded!(ErrorCode::Int000, "boom");
         }
         let err = inner().unwrap_err();
-        let coded = err.downcast_ref::<CodedError>().expect("expected a CodedError");
+        let coded = err
+            .downcast_ref::<CodedError>()
+            .expect("expected a CodedError");
         assert_eq!(coded.code(), ErrorCode::Int000);
         assert_eq!(coded.to_string(), "unclassified internal error: boom");
     }
@@ -286,7 +291,9 @@ mod tests {
     #[test]
     fn err_coded_builds_anyhow_error_without_returning() {
         let err = err_coded!(ErrorCode::Int000, "boom");
-        let coded = err.downcast_ref::<CodedError>().expect("expected a CodedError");
+        let coded = err
+            .downcast_ref::<CodedError>()
+            .expect("expected a CodedError");
         assert_eq!(coded.code(), ErrorCode::Int000);
     }
 

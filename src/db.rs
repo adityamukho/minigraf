@@ -1001,7 +1001,8 @@ impl Minigraf {
         name: &str,
         f: impl Fn(&Value) -> bool + Send + Sync + 'static,
     ) -> Result<(), MinigrafError> {
-        self.register_predicate_inner(name, f).map_err(MinigrafError::from)
+        self.register_predicate_inner(name, f)
+            .map_err(MinigrafError::from)
     }
 
     fn register_predicate_inner(

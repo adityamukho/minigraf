@@ -6,8 +6,6 @@ pub mod file;
 
 #[cfg(test)]
 pub mod fault_inject;
-#[cfg(test)]
-pub use fault_inject::{FaultConfig, FaultInjectingBackend};
 
 // Future: WASM backend
 // #[cfg(target_arch = "wasm32")]
