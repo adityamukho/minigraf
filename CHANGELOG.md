@@ -86,6 +86,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string-matches error output is affected, including the interactive REPL's
   printed error messages and all 7 language-binding repos (Python, Node,
   WASM, Java, Android, Swift, C).
+- **Storage/file-format errors now surface their real `STG-0xx` code** (#359,
+  part of #277's rollout): all 27 documented `STG-0xx` codes are wired up
+  across `src/storage/{mod,persistent_facts,btree,btree_v6,packed_pages}.rs`
+  and `src/storage/backend/file.rs` — header validation (`STG-001`–`STG-009`),
+  header re-read failures (`STG-010`), on-disk B+tree/packed-page corruption
+  (`STG-011`–`STG-015`), a poisoned backend mutex (`STG-016`), page-count
+  arithmetic overflow guards (`STG-017`–`STG-024`), and the three lock
+  conflict errors (`STG-025`–`STG-027`). `docs/ERROR_REFERENCE.md`'s STG
+  section's "Error text" lines were rewritten from one-off example values to
+  canonical `{}`-placeholder templates so they byte-for-byte match the
+  `REGISTRY` entries the sync test checks against.
+  `FileBackend::open_with` no longer collapses a more specific header-parse
+  failure (e.g. a bad magic number) into the generic `STG-010` — it now
+  propagates a `CodedError` already present in the chain as-is, only falling
+  back to `STG-010` for a genuinely uncoded (e.g. raw I/O) failure.
+  Not covered by a dedicated regression test: `STG-011`'s call site is
+  guarded by a `debug_assert!` that always fires first in a debug/test
+  build, so it's release-build-only and unreachable under `cargo test`; the
+  8 arithmetic-overflow guards (`STG-017`–`STG-024`) and `STG-027` (a
+  filesystem that refuses locking outright — no CI runner provides one) are
+  covered by the registry↔doc sync test and code review but have no
+  dedicated trigger test, consistent with their own "should not occur under
+  normal operation" documentation. Two `bail!` sites with no matching
+  documented `STG` code ("Header checksum mismatch", reached on a genuine
+  on-disk corruption of an otherwise-valid header, and `into_backend`'s
+  multiple-owners precondition) were deliberately left uncoded (`INT-000`)
+  rather than assigned an undocumented code — left for the final API+INT
+  audit PR.
 - **`src/wal.rs`'s errors now carry real `WAL-0xx` codes instead of falling
   back to `INT-000`** (#360, toward #277): a bad `.wal` magic number is
   `WAL-001`, an unsupported WAL version is `WAL-002`, a fact whose serialised

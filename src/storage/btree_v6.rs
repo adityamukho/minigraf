@@ -4,6 +4,7 @@
 //! `build_btree` does a bulk-build (write-all-leaves, then internal levels
 //! bottom-up). Range scans traverse the tree through the cache.
 
+use crate::error::{ErrorCode, bail_coded};
 use crate::storage::cache::PageCache;
 use crate::storage::index::FactRef;
 use crate::storage::{PAGE_SIZE, StorageBackend};
@@ -116,7 +117,7 @@ fn write_internal_page(
     debug_assert_eq!(child_ids.len(), sep_bytes.len() + 1);
     // Defensive check: empty child_ids would cause panic on .last()
     if child_ids.is_empty() {
-        anyhow::bail!("internal page has no children");
+        bail_coded!(ErrorCode::Stg011);
     }
     let key_count = u16::try_from(sep_bytes.len())
         .map_err(|_| anyhow!("too many sep keys: {}", sep_bytes.len()))?;
@@ -555,7 +556,7 @@ where
             .copied()
             .ok_or_else(|| anyhow!("empty page at page_id={leaf_id}"))?;
         if page_type != PAGE_TYPE_LEAF {
-            anyhow::bail!("range_scan: expected leaf at page_id={}", leaf_id);
+            bail_coded!(ErrorCode::Stg013, leaf_id);
         }
         let next_leaf = read_u64_at(&page[..], 4)?;
         let entries: Vec<(K, FactRef)> = read_leaf_entries(&page[..])?;
@@ -1097,6 +1098,70 @@ mod tests {
             100,
             "entities 100..199 (end key excludes entity 200's entry since its attr ':a' > '')"
         );
+    }
+
+    // ══ #359: STG-0xx regression tests ═══════════════════════════════════
+    //
+    // STG-011 ("internal page has no children") is guarded by
+    // `debug_assert_eq!(child_ids.len(), sep_bytes.len() + 1)` immediately
+    // above the `bail_coded!` call site in `write_internal_page`, and no
+    // combination of arguments satisfies that assertion when `child_ids` is
+    // empty (`sep_bytes.len() + 1` can never be `0`). So under `cargo
+    // test`'s debug build, the `debug_assert!` always panics first,
+    // preempting the bail entirely -- this call site is only live as a
+    // release-build defensive guard and isn't reachable from a normal test
+    // build. No dedicated regression test for STG-011 as a result.
+
+    /// A leaf's `next_leaf` chain pointer corrupted to point at a non-leaf
+    /// page must surface as the coded STG-013 when `range_scan` follows it,
+    /// not a generic error. `find_leaf_for_key`'s own traversal only
+    /// validates the *first* leaf it lands on; a corrupted `next_leaf` on a
+    /// later page in a multi-leaf scan is caught by `range_scan`'s own
+    /// per-page check.
+    #[test]
+    fn range_scan_corrupted_next_leaf_pointer_returns_stg_013() {
+        let mut backend = MemoryBackend::new();
+        let cache = PageCache::new(512);
+        // Enough entries with long keys to force a multi-leaf tree with an
+        // internal-node root (mirrors test_build_btree_leaf_next_pointers_form_chain).
+        let entries = (0u128..100).map(|n| make_eavt(n, ":verylongattributename", n as u64 + 1));
+        let ser = btree_entries(entries).unwrap();
+        let (root, _) = build_btree(ser.into_iter(), &mut backend, &cache, 1).unwrap();
+
+        let root_page = cache.get_or_load(root, &backend).unwrap();
+        assert_eq!(
+            root_page[0], PAGE_TYPE_INTERNAL,
+            "100 long-key entries must produce an internal-node root for this test to be valid"
+        );
+
+        // Find the leftmost leaf by following first children down from root.
+        let mut leaf_pid = root;
+        loop {
+            let p = cache.get_or_load(leaf_pid, &backend).unwrap();
+            if p[0] == PAGE_TYPE_LEAF {
+                break;
+            }
+            leaf_pid = read_u64_at(&p[..], 12).unwrap();
+        }
+
+        // Corrupt the leftmost leaf's next_leaf pointer (bytes 4..12) to
+        // point at the internal-node root instead of the next real leaf.
+        let mut leaf_bytes = backend.read_page(leaf_pid).unwrap();
+        leaf_bytes[4..12].copy_from_slice(&root.to_le_bytes());
+        backend.write_page(leaf_pid, &leaf_bytes).unwrap();
+        cache.invalidate(leaf_pid);
+
+        let start = EavtKey {
+            entity: Uuid::from_u128(0),
+            attribute: String::new(),
+            valid_from: i64::MIN,
+            valid_to: i64::MIN,
+            tx_count: 0,
+        };
+        let err = range_scan::<EavtKey>(root, &start, None, &backend, &cache)
+            .expect_err("following a next_leaf pointer into a non-leaf page must fail");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-013");
     }
 
     #[test]

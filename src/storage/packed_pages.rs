@@ -19,6 +19,7 @@
 //! Overflow pages (`page_type = 0x03`) are reserved for future use.
 //! The `next_page` field is always written as 0 in Phase 6.2.
 
+use crate::error::{ErrorCode, bail_coded};
 use crate::graph::types::Fact;
 use crate::storage::index::FactRef;
 use crate::storage::{PAGE_SIZE, StorageBackend};
@@ -165,7 +166,7 @@ pub fn read_slot(page: &[u8], slot: u16) -> Result<Fact> {
         .first()
         .ok_or_else(|| anyhow::anyhow!("packed page empty"))?;
     if page_type != PAGE_TYPE_PACKED {
-        anyhow::bail!("Expected packed page (0x02), got 0x{:02x}", page_type);
+        bail_coded!(ErrorCode::Stg014, format!("{:02x}", page_type));
     }
     let b2 = *page
         .get(2)
@@ -200,7 +201,7 @@ pub fn read_slot(page: &[u8], slot: u16) -> Result<Fact> {
     let offset = usize::from(u16::from_le_bytes([db0, db1]));
     let length = usize::from(u16::from_le_bytes([db2, db3]));
     if offset.saturating_add(length) > PAGE_SIZE {
-        anyhow::bail!("Record at slot {} extends beyond page boundary", slot);
+        bail_coded!(ErrorCode::Stg015, slot);
     }
     let fact: Fact = postcard::from_bytes(
         page.get(offset..offset.saturating_add(length))
@@ -425,5 +426,36 @@ mod tests {
         );
         let result = pack_facts(&[fact], 1);
         assert!(result.is_err(), "oversized fact must return Err, not panic");
+    }
+
+    // ══ #359: STG-0xx regression tests ═══════════════════════════════════
+
+    /// A page whose type byte is not `PAGE_TYPE_PACKED` must surface as the
+    /// coded STG-014, not a generic error.
+    #[test]
+    fn read_slot_wrong_page_type_returns_stg_014() {
+        let facts = vec![make_fact(1)];
+        let (mut pages, _) = pack_facts(&facts, 1).unwrap();
+        pages[0][0] = 0x01; // corrupt: not PAGE_TYPE_PACKED (0x02)
+        let err = read_slot(&pages[0], 0).expect_err("wrong page type must fail to read");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-014");
+    }
+
+    /// A record directory entry whose `offset + length` extends past the
+    /// page boundary must surface as the coded STG-015, not a generic
+    /// error.
+    #[test]
+    fn read_slot_record_beyond_page_boundary_returns_stg_015() {
+        let facts = vec![make_fact(1)];
+        let (mut pages, _) = pack_facts(&facts, 1).unwrap();
+        // Directory entry 0 is at bytes 12..16 (offset u16 LE, length u16 LE).
+        // Corrupt the length field so offset + length > PAGE_SIZE.
+        pages[0][14] = 0xFF;
+        pages[0][15] = 0xFF;
+        let err = read_slot(&pages[0], 0)
+            .expect_err("a record extending past the page boundary must fail to read");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-015");
     }
 }
