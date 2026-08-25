@@ -356,6 +356,27 @@ mod tests {
     }
 
     #[test]
+    fn minigraf_error_finds_coded_error_through_two_context_hops() {
+        let anyhow_err = err_coded!(ErrorCode::Int000, "boom")
+            .context("first context")
+            .context("second context");
+        let e: MinigrafError = anyhow_err.into();
+        assert_eq!(e.code(), "INT-000");
+        assert_eq!(e.to_string(), "[INT-000] unclassified internal error: boom");
+    }
+
+    // A genuine arg-count mismatch trips the `debug_assert_eq!` in
+    // `format_template` — active under `cargo test`'s debug build, which is
+    // what this test exercises. In a release build (`debug_assert!` compiled
+    // out) the same call does not panic: the loop below the assert simply
+    // drops the text of any `{}` placeholder with no matching arg.
+    #[test]
+    #[should_panic(expected = "different placeholder count")]
+    fn format_template_arg_count_mismatch_debug_asserts() {
+        format_template("value: {}", &[]);
+    }
+
+    #[test]
     fn minigraf_error_falls_back_to_int000_for_uncoded_anyhow_error() {
         let anyhow_err = anyhow::anyhow!("plain uncoded error");
         let e: MinigrafError = anyhow_err.into();
