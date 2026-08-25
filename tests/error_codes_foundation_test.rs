@@ -46,3 +46,17 @@ fn begin_write_then_checkpoint_returns_ok() {
     let checkpoint = db.checkpoint();
     assert!(checkpoint.is_ok(), "checkpoint on an in-memory db is a no-op success");
 }
+
+#[test]
+fn prepare_and_register_predicate_return_ok() {
+    use minigraf::Value;
+
+    let db = Minigraf::in_memory().unwrap();
+    let prepared = db.prepare("(query [:find ?e :where [?e :name $name]])");
+    assert!(prepared.is_ok(), "preparing a valid query should succeed");
+
+    let registered = db.register_predicate("even277?", |v: &Value| {
+        matches!(v, Value::Integer(i) if i % 2 == 0)
+    });
+    assert!(registered.is_ok(), "registering a new predicate name should succeed");
+}

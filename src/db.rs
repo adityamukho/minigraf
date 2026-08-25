@@ -765,6 +765,13 @@ impl Minigraf {
     pub fn prepare(
         &self,
         query_str: &str,
+    ) -> Result<crate::query::datalog::prepared::PreparedQuery, MinigrafError> {
+        self.prepare_inner(query_str).map_err(MinigrafError::from)
+    }
+
+    fn prepare_inner(
+        &self,
+        query_str: &str,
     ) -> Result<crate::query::datalog::prepared::PreparedQuery> {
         use crate::query::datalog::prepared::prepare_query;
 
@@ -923,6 +930,20 @@ impl Minigraf {
         init: impl Fn() -> Acc + Send + Sync + 'static,
         step: impl Fn(&mut Acc, &Value) + Send + Sync + 'static,
         finalise: impl Fn(&Acc, usize) -> Value + Send + Sync + 'static,
+    ) -> Result<(), MinigrafError>
+    where
+        Acc: Any + Send + 'static,
+    {
+        self.register_aggregate_inner(name, init, step, finalise)
+            .map_err(MinigrafError::from)
+    }
+
+    fn register_aggregate_inner<Acc>(
+        &self,
+        name: &str,
+        init: impl Fn() -> Acc + Send + Sync + 'static,
+        step: impl Fn(&mut Acc, &Value) + Send + Sync + 'static,
+        finalise: impl Fn(&Acc, usize) -> Value + Send + Sync + 'static,
     ) -> Result<()>
     where
         Acc: Any + Send + 'static,
@@ -976,6 +997,14 @@ impl Minigraf {
     /// ).unwrap();
     /// ```
     pub fn register_predicate(
+        &self,
+        name: &str,
+        f: impl Fn(&Value) -> bool + Send + Sync + 'static,
+    ) -> Result<(), MinigrafError> {
+        self.register_predicate_inner(name, f).map_err(MinigrafError::from)
+    }
+
+    fn register_predicate_inner(
         &self,
         name: &str,
         f: impl Fn(&Value) -> bool + Send + Sync + 'static,
