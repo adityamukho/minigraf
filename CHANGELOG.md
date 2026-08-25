@@ -127,6 +127,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canonical `{}`-placeholder template form so the registry↔doc sync test can
   compare them byte-for-byte; the concrete example now lives in each entry's
   prose instead.
+- **Query executor errors now carry real `QRY-00N` codes** (#361, part of
+  #277) instead of the generic `INT-000` fallback: `QRY-001` invalid entity,
+  `QRY-002` attribute must be a keyword, `QRY-003` cannot transact a
+  pseudo-attribute, `QRY-004` invalid value, `QRY-005` transaction failed,
+  `QRY-006` retraction failed, `QRY-007` unknown predicate, `QRY-008`
+  functions lock poisoned, `QRY-009` rules lock poisoned — the full QRY
+  category (9 of 9 documented codes; see `docs/ERROR_REFERENCE.md`). Anything
+  that was matching on `MinigrafError::code() == "INT-000"` for one of these
+  conditions now sees the specific code instead. `QRY-001`/`004`/`005`/`006`'s
+  `ERROR_REFERENCE.md` "Error text" entries were also rewritten from a
+  concrete example (e.g. `` `Invalid entity: "not-a-uuid"` ``) to the
+  canonical `{}`-placeholder template form (`` `Invalid entity: {}` ``) they
+  share with `REGISTRY`, per the design spec's migration convention; the
+  worked example moved to each entry's "Example" section, unchanged.
+  `QRY-001`..`006` (the transact/retract validation codes) are wired into
+  `DatalogExecutor::execute_transact`/`execute_retract`, but that code path
+  is not reachable through `Minigraf::execute()` today — the public write
+  path routes `transact`/`retract` through `Minigraf::materialize_transaction`/
+  `materialize_retraction` (`src/db.rs`) instead, which raise their own
+  uncoded (still `INT-000`) errors, two of which — "attribute must be a
+  keyword" and "cannot transact a pseudo-attribute" — are already earmarked
+  as `API-003`/`API-004` for the API+INT category PR (#277 step 6).
+- **The core binary size budget is raised from 1MB to ~1.2MB** (`binary-size.yml`'s
+  `SIZE_LIMIT_BYTES`, and PHILOSOPHY.md §4's stated target), toward #277.
+  The project was already at the 1MB wire before #277 started (measured
+  ~1034 KiB pre-rollout on a controlled local build); #360 (WAL, 6 codes) and
+  #361 (QRY, 9 codes) together added only ~9 KiB, and even that was enough to
+  fail CI. All existing size levers — `opt-level = "z"`, `lto = true`,
+  `codegen-units = 1`, `strip = "symbols"`, and the non-generic
+  `bail_coded!`/`err_coded!`/`format_template` design (no per-call-site
+  monomorphization, unlike the generic `build_btree` fixed for the same
+  reason in v0.x) — were already in place; `cargo bloat` shows no single
+  dominant symbol to cut, just diffuse growth across ~2000 small functions.
+  Extrapolating to the full 130-code rollout (PRS: 79, STG: 27, WAL: 6,
+  QRY: 9, API+INT: 9) puts the total growth at roughly 60-70 KiB over the
+  pre-#277 baseline, which no further micro-optimization of already-maxed
+  settings can absorb. ~1.2MB keeps meaningful headroom above that projection
+  without abandoning the philosophy's small-binary principle.
 
 ### Bug fixes
 

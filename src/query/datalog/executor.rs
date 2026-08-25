@@ -7,6 +7,7 @@ use super::types::{
     AsOf, AttributeSpec, BinOp, DatalogCommand, DatalogQuery, EdnValue, Expr, FindSpec, Order,
     Pattern, Rule, Transaction, UnaryOp, ValidAt, WhereClause, WindowFunc,
 };
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::FactStorage;
 use crate::graph::types::{Fact, TransactOptions, TxId, Value, tx_id_now};
 use anyhow::{Result, anyhow};
@@ -241,18 +242,18 @@ impl DatalogExecutor {
         let mut fact_tuples = Vec::new();
         for pattern in tx.facts {
             let entity_id =
-                edn_to_entity_id(&pattern.entity).map_err(|e| anyhow!("Invalid entity: {}", e))?;
+                edn_to_entity_id(&pattern.entity).map_err(|e| err_coded!(ErrorCode::Qry001, e))?;
 
             let attribute = match &pattern.attribute {
                 AttributeSpec::Real(EdnValue::Keyword(k)) => k.clone(),
-                AttributeSpec::Real(_) => return Err(anyhow!("Attribute must be a keyword")),
+                AttributeSpec::Real(_) => bail_coded!(ErrorCode::Qry002),
                 AttributeSpec::Pseudo(_) => {
-                    return Err(anyhow!("Cannot transact a pseudo-attribute"));
+                    bail_coded!(ErrorCode::Qry003);
                 }
             };
 
             let value =
-                edn_to_value(&pattern.value).map_err(|e| anyhow!("Invalid value: {}", e))?;
+                edn_to_value(&pattern.value).map_err(|e| err_coded!(ErrorCode::Qry004, e))?;
 
             let per_fact_opts = if pattern.valid_from.is_some() || pattern.valid_to.is_some() {
                 Some(TransactOptions::new(pattern.valid_from, pattern.valid_to))
@@ -266,7 +267,7 @@ impl DatalogExecutor {
         let (tx_id, _tx_count) = self
             .storage
             .transact_batch(fact_tuples, tx_opts)
-            .map_err(|e| anyhow!("Transaction failed: {}", e))?;
+            .map_err(|e| err_coded!(ErrorCode::Qry005, e))?;
 
         Ok(QueryResult::Transacted(tx_id))
     }
@@ -277,18 +278,18 @@ impl DatalogExecutor {
 
         for pattern in tx.facts {
             let entity_id =
-                edn_to_entity_id(&pattern.entity).map_err(|e| anyhow!("Invalid entity: {}", e))?;
+                edn_to_entity_id(&pattern.entity).map_err(|e| err_coded!(ErrorCode::Qry001, e))?;
 
             let attribute = match &pattern.attribute {
                 AttributeSpec::Real(EdnValue::Keyword(k)) => k.clone(),
-                AttributeSpec::Real(_) => return Err(anyhow!("Attribute must be a keyword")),
+                AttributeSpec::Real(_) => bail_coded!(ErrorCode::Qry002),
                 AttributeSpec::Pseudo(_) => {
-                    return Err(anyhow!("Cannot transact a pseudo-attribute"));
+                    bail_coded!(ErrorCode::Qry003);
                 }
             };
 
             let value =
-                edn_to_value(&pattern.value).map_err(|e| anyhow!("Invalid value: {}", e))?;
+                edn_to_value(&pattern.value).map_err(|e| err_coded!(ErrorCode::Qry004, e))?;
 
             fact_tuples.push((entity_id, attribute, value));
         }
@@ -296,7 +297,7 @@ impl DatalogExecutor {
         let (tx_id, _tx_count) = self
             .storage
             .retract(fact_tuples)
-            .map_err(|e| anyhow!("Retraction failed: {}", e))?;
+            .map_err(|e| err_coded!(ErrorCode::Qry006, e))?;
 
         Ok(QueryResult::Retracted(tx_id))
     }
@@ -502,7 +503,7 @@ impl DatalogExecutor {
         let registry = self
             .functions
             .read()
-            .map_err(|_| anyhow!("functions lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry008))?;
 
         // Pre-validate UDF predicate names: surface unknown predicates as errors before
         // processing any rows (matches the behaviour of the former apply_expr_clauses post-pass).
@@ -513,7 +514,7 @@ impl DatalogExecutor {
             } = clause
                 && registry.get_predicate(name).is_none()
             {
-                anyhow::bail!("unknown predicate: '{}'", name);
+                bail_coded!(ErrorCode::Qry007, name);
             }
         }
 
@@ -593,7 +594,7 @@ impl DatalogExecutor {
         let rules_guard = self
             .rules
             .read()
-            .map_err(|_| anyhow!("rules lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry009))?;
         let mut bindings = apply_or_clauses(
             &query.where_clauses,
             bindings,
@@ -695,7 +696,7 @@ impl DatalogExecutor {
             let reg = self
                 .rules
                 .read()
-                .map_err(|_| anyhow!("rule registry lock poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Qry009))?;
             crate::query::datalog::magic_sets::rewrite(&query, &reg)
         };
         let (eval_rules, seed_facts) = match rewritten {
@@ -733,7 +734,7 @@ impl DatalogExecutor {
         let registry = self
             .functions
             .read()
-            .map_err(|_| anyhow!("functions lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry008))?;
 
         // Pre-validate UDF predicate names.
         for clause in &query.where_clauses {
@@ -743,7 +744,7 @@ impl DatalogExecutor {
             } = clause
                 && registry.get_predicate(name).is_none()
             {
-                anyhow::bail!("unknown predicate: '{}'", name);
+                bail_coded!(ErrorCode::Qry007, name);
             }
         }
 
@@ -851,7 +852,7 @@ impl DatalogExecutor {
         let rules_guard = self
             .rules
             .read()
-            .map_err(|_| anyhow!("rules lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry009))?;
         let mut bindings = apply_or_clauses(
             &query.where_clauses,
             bindings,
@@ -908,7 +909,7 @@ impl DatalogExecutor {
         // Register the rule
         self.rules
             .write()
-            .map_err(|_| anyhow!("rules lock poisoned"))?
+            .map_err(|_| err_coded!(ErrorCode::Qry009))?
             .register_rule(predicate, rule)?;
 
         Ok(QueryResult::Ok)
@@ -2376,7 +2377,7 @@ pub(crate) fn apply_expr_clauses(
         } = clause
             && registry.get_predicate(name).is_none()
         {
-            anyhow::bail!("unknown predicate: '{}'", name);
+            bail_coded!(ErrorCode::Qry007, name);
         }
     }
 
@@ -4495,6 +4496,18 @@ mod expr_eval_tests {
     }
 
     // ── Stream 3: branches unreachable via the parser ─────────────────────────
+    //
+    // `execute_transact`/`execute_retract` (below) carry the QRY-001..006
+    // codes, but `Minigraf::execute()`'s write path (src/db.rs `execute_inner`)
+    // routes `transact`/`retract` commands through `Minigraf::materialize_transaction`/
+    // `materialize_retraction` instead, for WAL-first-ordering reasons — it
+    // never calls these methods. That makes these branches unreachable from
+    // `db.execute()` today (confirmed empirically, not just by inspection), so
+    // they are exercised here via direct `DatalogExecutor` construction, same
+    // as the rest of this "unreachable via the parser" stream. `db.rs`'s own
+    // near-duplicate messages are already earmarked as API-003/API-004 in
+    // ERROR_REFERENCE.md for the API+INT category PR (#277 step 6); QRY-001/
+    // 004/005/006 currently have no `db.rs`-side equivalent at all.
 
     #[test]
     fn execute_transact_non_keyword_attribute_error() {
@@ -4511,7 +4524,8 @@ mod expr_eval_tests {
             valid_to: None,
         });
         let r = executor.execute(cmd);
-        assert!(r.is_err(), "non-keyword attribute in transact must fail");
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-002");
     }
 
     #[test]
@@ -4528,12 +4542,13 @@ mod expr_eval_tests {
             valid_to: None,
         });
         let r = executor.execute(cmd);
-        assert!(r.is_err(), "non-keyword attribute in retract must fail");
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-002");
     }
 
     #[test]
     fn execute_transact_pseudo_attr_error() {
-        // Exercises executor.rs line 103: Pseudo(_) arm in execute_transact
+        // Exercises the Pseudo(_) arm in execute_transact
         use crate::query::datalog::types::{PseudoAttr, Transaction};
         let storage = FactStorage::new();
         let executor = DatalogExecutor::new(storage);
@@ -4547,12 +4562,13 @@ mod expr_eval_tests {
             valid_to: None,
         });
         let r = executor.execute(cmd);
-        assert!(r.is_err(), "transacting a pseudo-attribute must fail");
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-003");
     }
 
     #[test]
     fn execute_retract_pseudo_attr_error() {
-        // Exercises executor.rs line 139: Pseudo(_) arm in execute_retract
+        // Exercises the Pseudo(_) arm in execute_retract
         use crate::query::datalog::types::{PseudoAttr, Transaction};
         let storage = FactStorage::new();
         let executor = DatalogExecutor::new(storage);
@@ -4566,7 +4582,175 @@ mod expr_eval_tests {
             valid_to: None,
         });
         let r = executor.execute(cmd);
-        assert!(r.is_err(), "retracting a pseudo-attribute must fail");
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-003");
+    }
+
+    #[test]
+    fn execute_transact_invalid_entity_error() {
+        // Entity is neither a Keyword nor a Uuid — edn_to_entity_id fails.
+        let storage = FactStorage::new();
+        let executor = DatalogExecutor::new(storage);
+        let cmd = DatalogCommand::Transact(Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::String("not-a-uuid".to_string()),
+                EdnValue::Keyword(":name".to_string()),
+                EdnValue::String("Alice".to_string()),
+            )],
+            valid_from: None,
+            valid_to: None,
+        });
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-001");
+    }
+
+    #[test]
+    fn execute_retract_invalid_entity_error() {
+        let storage = FactStorage::new();
+        let executor = DatalogExecutor::new(storage);
+        let cmd = DatalogCommand::Retract(Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Integer(42),
+                EdnValue::Keyword(":name".to_string()),
+                EdnValue::String("Alice".to_string()),
+            )],
+            valid_from: None,
+            valid_to: None,
+        });
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-001");
+    }
+
+    #[test]
+    fn execute_transact_invalid_value_error() {
+        // An unbound `?variable` symbol cannot be converted to a stored Value.
+        let storage = FactStorage::new();
+        let executor = DatalogExecutor::new(storage);
+        let cmd = DatalogCommand::Transact(Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Keyword(":e".to_string()),
+                EdnValue::Keyword(":name".to_string()),
+                EdnValue::Symbol("?unbound".to_string()),
+            )],
+            valid_from: None,
+            valid_to: None,
+        });
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-004");
+    }
+
+    #[test]
+    fn execute_retract_invalid_value_error() {
+        let storage = FactStorage::new();
+        let executor = DatalogExecutor::new(storage);
+        let cmd = DatalogCommand::Retract(Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Keyword(":e".to_string()),
+                EdnValue::Keyword(":name".to_string()),
+                EdnValue::Symbol("?unbound".to_string()),
+            )],
+            valid_from: None,
+            valid_to: None,
+        });
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-004");
+    }
+
+    // NOTE: QRY-005 (Transaction failed) and QRY-006 (Retraction failed) wrap
+    // `FactStorage::transact_batch`/`retract`'s only failure mode — its
+    // private `data: RwLock<FactData>` (src/graph/storage.rs) being poisoned.
+    // That field isn't reachable from this module (or from any of the other
+    // four files in this issue's scope) without a test-only hook inside
+    // `src/graph/storage.rs`, which is outside this PR's scope (issue #361
+    // covers only executor.rs/evaluator.rs/optimizer.rs/matcher.rs/
+    // magic_sets.rs). The call sites are migrated and their templates are
+    // verified against ERROR_REFERENCE.md by `error::tests::
+    // registry_is_a_subset_of_error_reference_doc`; a genuine end-to-end
+    // trigger is left to whichever PR next touches src/graph/storage.rs.
+
+    /// Poisons `lock` with a real panic in another thread while the write
+    /// guard is held, then joins (discarding the panic payload). Unlike
+    /// `FactStorage`'s internal `data` lock, `rules`/`functions` are
+    /// constructor parameters of `DatalogExecutor`, so they can be poisoned
+    /// from outside — no test hook needed in another file.
+    fn poison_rwlock<T>(lock: &Arc<RwLock<T>>)
+    where
+        T: Send + Sync + 'static,
+    {
+        let lock = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = lock.write().unwrap();
+            panic!("deliberate poison for a QRY-008/QRY-009 regression test");
+        })
+        .join();
+    }
+
+    #[test]
+    fn execute_query_functions_lock_poisoned_error() {
+        let storage = FactStorage::new();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        poison_rwlock(&functions);
+
+        let executor = DatalogExecutor::new_with_rules_and_functions(storage, rules, functions);
+        let cmd = parse_datalog_command(r#"(query [:find ?e :where [?e :name ?n]])"#).unwrap();
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-008");
+    }
+
+    #[test]
+    fn execute_rule_rules_lock_poisoned_error() {
+        let storage = FactStorage::new();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        poison_rwlock(&rules);
+
+        let executor = DatalogExecutor::new_with_rules_and_functions(storage, rules, functions);
+        let cmd = parse_datalog_command(r#"(rule [(p ?x) [?x :a true]])"#).unwrap();
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-009");
+    }
+
+    #[test]
+    fn execute_query_with_rules_rules_lock_poisoned_error() {
+        // Covers the magic-sets rewrite's rules.read() in execute_query_with_rules
+        // (distinct call site from execute_rule's rules.write()).
+        let storage = FactStorage::new();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        {
+            // Register a rule normally first so the query recognises it as
+            // rule-backed (uses_rules()) and takes the rules path.
+            let mut reg = rules.write().unwrap();
+            reg.register_rule(
+                "p".to_string(),
+                Rule {
+                    head: vec![
+                        EdnValue::Symbol("p".to_string()),
+                        EdnValue::Symbol("?x".to_string()),
+                    ],
+                    body: vec![WhereClause::Pattern(Pattern::new(
+                        EdnValue::Symbol("?x".to_string()),
+                        EdnValue::Keyword(":a".to_string()),
+                        EdnValue::Boolean(true),
+                    ))],
+                },
+            )
+            .unwrap();
+        }
+        poison_rwlock(&rules);
+
+        let executor = DatalogExecutor::new_with_rules_and_functions(storage, rules, functions);
+        let cmd = parse_datalog_command(r#"(query [:find ?x :where (p ?x)])"#).unwrap();
+        let r = executor.execute(cmd);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "QRY-009");
     }
 
     #[test]

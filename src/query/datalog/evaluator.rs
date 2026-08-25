@@ -27,6 +27,7 @@ use super::functions::FunctionRegistry;
 use super::matcher::{Bindings, PatternMatcher, edn_to_entity_id, edn_to_value};
 use super::rules::RuleRegistry;
 use super::types::{AttributeSpec, EdnValue, Pattern, Rule, WhereClause};
+use crate::error::{ErrorCode, err_coded};
 use crate::graph::FactStorage;
 use crate::graph::types::{Fact, Value};
 use crate::storage::index::encode_value;
@@ -206,7 +207,7 @@ impl RecursiveEvaluator {
         let registry = self
             .rules
             .read()
-            .map_err(|_| anyhow!("rule registry lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry009))?;
 
         // For each predicate, evaluate all its rules
         for predicate in predicates {
@@ -286,7 +287,7 @@ impl RecursiveEvaluator {
         let fn_guard = self
             .functions
             .read()
-            .map_err(|_| anyhow!("function registry lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry008))?;
         let bindings = apply_expr_clauses_in_evaluator(bindings, &expr_clauses, &fn_guard);
 
         for binding in bindings {
@@ -609,7 +610,7 @@ impl StratifiedEvaluator {
         let registry = self
             .rules
             .read()
-            .map_err(|_| anyhow!("rule registry lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Qry009))?;
 
         // Build dependency graph and stratify
         let graph = DependencyGraph::from_rules(&registry);
@@ -652,7 +653,7 @@ impl StratifiedEvaluator {
             let registry = self
                 .rules
                 .read()
-                .map_err(|_| anyhow!("rule registry lock poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Qry009))?;
             let stratum_preds: Vec<String> = all_preds
                 .iter()
                 .filter(|p| *strata.get(*p).unwrap_or(&0) == stratum)
@@ -819,7 +820,7 @@ impl StratifiedEvaluator {
                 let fn_guard = self
                     .functions
                     .read()
-                    .map_err(|_| anyhow!("function registry lock poisoned"))?;
+                    .map_err(|_| err_coded!(ErrorCode::Qry008))?;
                 let mut candidates: Vec<Bindings> = vec![Bindings::new()];
                 for (clause, hint) in planned {
                     match clause {
@@ -862,7 +863,7 @@ impl StratifiedEvaluator {
                     let registry_guard = self
                         .rules
                         .read()
-                        .map_err(|_| anyhow!("rule registry lock poisoned"))?;
+                        .map_err(|_| err_coded!(ErrorCode::Qry009))?;
                     // Rule bodies in the semi-naive evaluator don't have access to a
                     // FunctionRegistry (UDF registration happens at the db layer). Use the
                     // built-in-only registry so or-branches can still use built-in predicates.
@@ -952,7 +953,7 @@ impl StratifiedEvaluator {
                         let fn_guard = self
                             .functions
                             .read()
-                            .map_err(|_| anyhow!("function registry lock poisoned"))?;
+                            .map_err(|_| err_coded!(ErrorCode::Qry008))?;
                         not_bindings = apply_expr_clauses_in_evaluator(
                             not_bindings,
                             &not_body_expr_clauses,
@@ -968,7 +969,7 @@ impl StratifiedEvaluator {
                         let fn_guard = self
                             .functions
                             .read()
-                            .map_err(|_| anyhow!("function registry lock poisoned"))?;
+                            .map_err(|_| err_coded!(ErrorCode::Qry008))?;
                         if evaluate_not_join(
                             join_vars,
                             nj_clauses,
@@ -1061,6 +1062,20 @@ mod tests {
 
     // ── Additional targeted branch coverage ───────────────────────────────────
 
+    /// `FactStorage` (the `Ok` type of `evaluate_recursive_rules`/`evaluate`)
+    /// deliberately does not implement `Debug`, so `Result::unwrap_err()` — which
+    /// requires `T: Debug` to format a panic message on the non-error branch —
+    /// cannot be used directly. Extract the code via a plain match instead.
+    fn expect_err_code(result: Result<FactStorage>) -> String {
+        match result {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => {
+                let err: crate::error::MinigrafError = e.into();
+                err.code().to_string()
+            }
+        }
+    }
+
     #[test]
     fn test_max_iterations_exceeded_returns_error() {
         // Line 113: iteration > self.max_iterations → returns Err
@@ -1086,7 +1101,135 @@ mod tests {
             DEFAULT_MAX_RESULTS,
         );
         let result = evaluator.evaluate_recursive_rules(&["reachable".to_string()]);
-        assert!(result.is_err(), "should fail when max iterations exceeded");
+        let code = expect_err_code(result);
+        // No QRY-0xx code is documented in ERROR_REFERENCE.md for the
+        // recursion/depth-limit family ("Max iterations exceeded", "Max
+        // derived facts exceeded", "Max query results exceeded") — the 9
+        // documented QRY codes cover transact/retract validation, unknown
+        // predicates, and function/rule registry lock poisoning only. This
+        // is a live, public-API-reachable error path (a query over a
+        // non-terminating recursive rule with a low `max_derived_facts`/
+        // `max_results`, or — as constructed directly here — a pathological
+        // `max_iterations`), currently falling through to the generic
+        // INT-000 catch-all by design (see src/error.rs's `MinigrafError::from`
+        // fallback). Locking in today's code here so this is a deliberate,
+        // documented gap rather than a silent one; assigning it a real code
+        // is candidate follow-up work for the API+INT category PR (#277
+        // step 6), which audits every leftover uncoded call site crate-wide.
+        assert_eq!(code, "INT-000");
+    }
+
+    #[test]
+    fn test_max_derived_facts_exceeded_returns_int000() {
+        // Same rationale as test_max_iterations_exceeded_returns_error above:
+        // "Max derived facts per iteration exceeded" has no documented QRY
+        // code, so it currently — and, for this PR, deliberately — surfaces
+        // as INT-000.
+        let storage = create_test_storage();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        register_test_rule(&rules, r#"(rule [(reachable ?x ?y) [?x :connected ?y]])"#);
+        register_test_rule(
+            &rules,
+            r#"(rule [(reachable ?x ?y) [?x :connected ?z] (reachable ?z ?y)])"#,
+        );
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        // max_derived_facts=0 means the very first iteration's derived facts
+        // (there are 2 base :connected facts) exceed the limit.
+        let evaluator =
+            RecursiveEvaluator::new(storage, rules, functions, 1000, 0, DEFAULT_MAX_RESULTS);
+        let result = evaluator.evaluate_recursive_rules(&["reachable".to_string()]);
+        let code = expect_err_code(result);
+        assert_eq!(code, "INT-000");
+    }
+
+    #[test]
+    fn evaluate_iteration_rule_registry_lock_poisoned_error() {
+        let storage = create_test_storage();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        register_test_rule(&rules, r#"(rule [(reachable ?x ?y) [?x :connected ?y]])"#);
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        {
+            let rules = rules.clone();
+            let _ = std::thread::spawn(move || {
+                let _guard = rules.write().unwrap();
+                panic!(
+                    "deliberate poison for evaluate_iteration_rule_registry_lock_poisoned_error"
+                );
+            })
+            .join();
+        }
+        let evaluator = RecursiveEvaluator::new(
+            storage,
+            rules,
+            functions,
+            DEFAULT_MAX_ITERATIONS,
+            DEFAULT_MAX_DERIVED_FACTS,
+            DEFAULT_MAX_RESULTS,
+        );
+        let result = evaluator.evaluate_recursive_rules(&["reachable".to_string()]);
+        let code = expect_err_code(result);
+        assert_eq!(code, "QRY-009");
+    }
+
+    #[test]
+    fn evaluate_rule_function_registry_lock_poisoned_error() {
+        // Exercises evaluate_rule's function registry read (used to apply
+        // Expr clauses in a rule body).
+        let storage = create_test_storage();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        register_test_rule(
+            &rules,
+            r#"(rule [(over_ten ?x ?y) [?x :connected ?y] [(> 1 0)]])"#,
+        );
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        {
+            let functions = functions.clone();
+            let _ = std::thread::spawn(move || {
+                let _guard = functions.write().unwrap();
+                panic!("deliberate poison for evaluate_rule_function_registry_lock_poisoned_error");
+            })
+            .join();
+        }
+        let evaluator = RecursiveEvaluator::new(
+            storage,
+            rules,
+            functions,
+            DEFAULT_MAX_ITERATIONS,
+            DEFAULT_MAX_DERIVED_FACTS,
+            DEFAULT_MAX_RESULTS,
+        );
+        let result = evaluator.evaluate_recursive_rules(&["over_ten".to_string()]);
+        let code = expect_err_code(result);
+        assert_eq!(code, "QRY-008");
+    }
+
+    #[test]
+    fn stratified_evaluate_rule_registry_lock_poisoned_error() {
+        let storage = create_test_storage();
+        let rules = Arc::new(RwLock::new(RuleRegistry::new()));
+        register_test_rule(&rules, r#"(rule [(reachable ?x ?y) [?x :connected ?y]])"#);
+        let functions = Arc::new(RwLock::new(FunctionRegistry::with_builtins()));
+        {
+            let rules = rules.clone();
+            let _ = std::thread::spawn(move || {
+                let _guard = rules.write().unwrap();
+                panic!(
+                    "deliberate poison for stratified_evaluate_rule_registry_lock_poisoned_error"
+                );
+            })
+            .join();
+        }
+        let evaluator = StratifiedEvaluator::new(
+            storage,
+            rules,
+            functions,
+            DEFAULT_MAX_ITERATIONS,
+            DEFAULT_MAX_DERIVED_FACTS,
+            DEFAULT_MAX_RESULTS,
+        );
+        let result = evaluator.evaluate(&["reachable".to_string()]);
+        let code = expect_err_code(result);
+        assert_eq!(code, "QRY-009");
     }
 
     #[test]

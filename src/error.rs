@@ -44,6 +44,15 @@ pub enum ErrorCategory {
 /// size goal (see PHILOSOPHY.md) affordable as the registry grows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCode {
+    Qry001,
+    Qry002,
+    Qry003,
+    Qry004,
+    Qry005,
+    Qry006,
+    Qry007,
+    Qry008,
+    Qry009,
     Int000,
     Stg001,
     Stg002,
@@ -86,6 +95,60 @@ pub(crate) enum ErrorCode {
 /// "Error text" lines by the sync test in this module (added once real
 /// codes exist in a follow-up category PR — see the design spec).
 pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
+    (
+        ErrorCode::Qry001,
+        "QRY-001",
+        "Invalid entity: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry002,
+        "QRY-002",
+        "Attribute must be a keyword",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry003,
+        "QRY-003",
+        "Cannot transact a pseudo-attribute",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry004,
+        "QRY-004",
+        "Invalid value: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry005,
+        "QRY-005",
+        "Transaction failed: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry006,
+        "QRY-006",
+        "Retraction failed: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry007,
+        "QRY-007",
+        "unknown predicate: '{}'",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry008,
+        "QRY-008",
+        "functions lock poisoned",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry009,
+        "QRY-009",
+        "rules lock poisoned",
+        ErrorCategory::Query,
+    ),
     (
         ErrorCode::Int000,
         "INT-000",
@@ -562,6 +625,15 @@ mod tests {
         fn exhaustive(code: ErrorCode) {
             match code {
                 ErrorCode::Int000
+                | ErrorCode::Qry001
+                | ErrorCode::Qry002
+                | ErrorCode::Qry003
+                | ErrorCode::Qry004
+                | ErrorCode::Qry005
+                | ErrorCode::Qry006
+                | ErrorCode::Qry007
+                | ErrorCode::Qry008
+                | ErrorCode::Qry009
                 | ErrorCode::Stg001
                 | ErrorCode::Stg002
                 | ErrorCode::Stg003
@@ -600,6 +672,15 @@ mod tests {
 
         for code in [
             ErrorCode::Int000,
+            ErrorCode::Qry001,
+            ErrorCode::Qry002,
+            ErrorCode::Qry003,
+            ErrorCode::Qry004,
+            ErrorCode::Qry005,
+            ErrorCode::Qry006,
+            ErrorCode::Qry007,
+            ErrorCode::Qry008,
+            ErrorCode::Qry009,
             ErrorCode::Stg001,
             ErrorCode::Stg002,
             ErrorCode::Stg003,
