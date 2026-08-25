@@ -640,7 +640,11 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if a `WriteTransaction` is already active on **this thread**.
-    pub fn begin_write(&self) -> Result<WriteTransaction<'_>> {
+    pub fn begin_write(&self) -> Result<WriteTransaction<'_>, MinigrafError> {
+        self.begin_write_inner().map_err(MinigrafError::from)
+    }
+
+    fn begin_write_inner(&self) -> Result<WriteTransaction<'_>> {
         if is_write_tx_active() {
             bail!(
                 "a WriteTransaction is already in progress on this thread; use tx.execute() instead"
@@ -671,7 +675,11 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if the write lock is poisoned or the checkpoint I/O fails.
-    pub fn checkpoint(&self) -> Result<()> {
+    pub fn checkpoint(&self) -> Result<(), MinigrafError> {
+        self.checkpoint_inner().map_err(MinigrafError::from)
+    }
+
+    fn checkpoint_inner(&self) -> Result<()> {
         let mut ctx = self.inner.write_lock.lock().map_err(|_| {
             anyhow::anyhow!("write lock is poisoned; database may be in an inconsistent state")
         })?;

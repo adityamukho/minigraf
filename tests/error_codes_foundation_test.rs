@@ -36,3 +36,13 @@ fn execute_valid_transact_returns_ok() {
     let result = db.execute(r#"(transact [[#uuid "550e8400-e29b-41d4-a716-446655440000" :name "alice"]])"#);
     assert!(result.is_ok(), "valid transact should succeed");
 }
+
+#[test]
+fn begin_write_then_checkpoint_returns_ok() {
+    let db = Minigraf::in_memory().unwrap();
+    let tx = db.begin_write();
+    assert!(tx.is_ok(), "begin_write on a fresh db should succeed");
+    tx.unwrap().rollback();
+    let checkpoint = db.checkpoint();
+    assert!(checkpoint.is_ok(), "checkpoint on an in-memory db is a no-op success");
+}
