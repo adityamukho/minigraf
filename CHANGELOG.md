@@ -106,6 +106,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (PRS-044). Anything that string-matches parser error output — including
   the interactive REPL and all 7 language-binding repos — is affected by
   both the code prefix and this wording change.
+- **Storage/file-format errors now surface their real `STG-0xx` code** (#359,
+  part of #277's rollout): all 27 documented `STG-0xx` codes are wired up
+  across `src/storage/{mod,persistent_facts,btree,btree_v6,packed_pages}.rs`
+  and `src/storage/backend/file.rs` — header validation (`STG-001`–`STG-009`),
+  header re-read failures (`STG-010`), on-disk B+tree/packed-page corruption
+  (`STG-011`–`STG-015`), a poisoned backend mutex (`STG-016`), page-count
+  arithmetic overflow guards (`STG-017`–`STG-024`), and the three lock
+  conflict errors (`STG-025`–`STG-027`). `docs/ERROR_REFERENCE.md`'s STG
+  section's "Error text" lines were rewritten from one-off example values to
+  canonical `{}`-placeholder templates so they byte-for-byte match the
+  `REGISTRY` entries the sync test checks against.
+  `FileBackend::open_with` no longer collapses a more specific header-parse
+  failure (e.g. a bad magic number) into the generic `STG-010` — it now
+  propagates a `CodedError` already present in the chain as-is, only falling
+  back to `STG-010` for a genuinely uncoded (e.g. raw I/O) failure.
+  Not covered by a dedicated regression test: `STG-011`'s call site is
+  guarded by a `debug_assert!` that always fires first in a debug/test
+  build, so it's release-build-only and unreachable under `cargo test`; the
+  8 arithmetic-overflow guards (`STG-017`–`STG-024`) and `STG-027` (a
+  filesystem that refuses locking outright — no CI runner provides one) are
+  covered by the registry↔doc sync test and code review but have no
+  dedicated trigger test, consistent with their own "should not occur under
+  normal operation" documentation. Two `bail!` sites with no matching
+  documented `STG` code ("Header checksum mismatch", reached on a genuine
+  on-disk corruption of an otherwise-valid header, and `into_backend`'s
+  multiple-owners precondition) were deliberately left uncoded (`INT-000`)
+  rather than assigned an undocumented code — left for the final API+INT
+  audit PR.
+- **`src/wal.rs`'s errors now carry real `WAL-0xx` codes instead of falling
+  back to `INT-000`** (#360, toward #277): a bad `.wal` magic number is
+  `WAL-001`, an unsupported WAL version is `WAL-002`, a fact whose serialised
+  size exceeds the WAL's per-entry limit (~4080 bytes) is `WAL-003`, a fact
+  whose serialised size exceeds `u32::MAX` is `WAL-004` (practically
+  unreachable — WAL-003's limit fires first), a WAL header's `num_facts`
+  exceeding the platform `usize` is `WAL-005` (unreachable on any 64-bit
+  target), and a failure to delete the sidecar `.wal` file after a successful
+  checkpoint is `WAL-006`. `docs/ERROR_REFERENCE.md`'s WAL-002/003/004/006
+  "Error text" entries were rewritten from a concrete example value to the
+  canonical `{}`-placeholder template form so the registry↔doc sync test can
+  compare them byte-for-byte; the concrete example now lives in each entry's
+  prose instead.
+- **Query executor errors now carry real `QRY-00N` codes** (#361, part of
+  #277) instead of the generic `INT-000` fallback: `QRY-001` invalid entity,
+  `QRY-002` attribute must be a keyword, `QRY-003` cannot transact a
+  pseudo-attribute, `QRY-004` invalid value, `QRY-005` transaction failed,
+  `QRY-006` retraction failed, `QRY-007` unknown predicate, `QRY-008`
+  functions lock poisoned, `QRY-009` rules lock poisoned — the full QRY
+  category (9 of 9 documented codes; see `docs/ERROR_REFERENCE.md`). Anything
+  that was matching on `MinigrafError::code() == "INT-000"` for one of these
+  conditions now sees the specific code instead. `QRY-001`/`004`/`005`/`006`'s
+  `ERROR_REFERENCE.md` "Error text" entries were also rewritten from a
+  concrete example (e.g. `` `Invalid entity: "not-a-uuid"` ``) to the
+  canonical `{}`-placeholder template form (`` `Invalid entity: {}` ``) they
+  share with `REGISTRY`, per the design spec's migration convention; the
+  worked example moved to each entry's "Example" section, unchanged.
+  `QRY-001`..`006` (the transact/retract validation codes) are wired into
+  `DatalogExecutor::execute_transact`/`execute_retract`, but that code path
+  is not reachable through `Minigraf::execute()` today — the public write
+  path routes `transact`/`retract` through `Minigraf::materialize_transaction`/
+  `materialize_retraction` (`src/db.rs`) instead, which raise their own
+  uncoded (still `INT-000`) errors, two of which — "attribute must be a
+  keyword" and "cannot transact a pseudo-attribute" — are already earmarked
+  as `API-003`/`API-004` for the API+INT category PR (#277 step 6).
+- **The core binary size budget is raised from 1MB to ~1.2MB** (`binary-size.yml`'s
+  `SIZE_LIMIT_BYTES`, and PHILOSOPHY.md §4's stated target), toward #277.
+  The project was already at the 1MB wire before #277 started (measured
+  ~1034 KiB pre-rollout on a controlled local build); #360 (WAL, 6 codes) and
+  #361 (QRY, 9 codes) together added only ~9 KiB, and even that was enough to
+  fail CI. All existing size levers — `opt-level = "z"`, `lto = true`,
+  `codegen-units = 1`, `strip = "symbols"`, and the non-generic
+  `bail_coded!`/`err_coded!`/`format_template` design (no per-call-site
+  monomorphization, unlike the generic `build_btree` fixed for the same
+  reason in v0.x) — were already in place; `cargo bloat` shows no single
+  dominant symbol to cut, just diffuse growth across ~2000 small functions.
+  Extrapolating to the full 130-code rollout (PRS: 79, STG: 27, WAL: 6,
+  QRY: 9, API+INT: 9) puts the total growth at roughly 60-70 KiB over the
+  pre-#277 baseline, which no further micro-optimization of already-maxed
+  settings can absorb. ~1.2MB keeps meaningful headroom above that projection
+  without abandoning the philosophy's small-binary principle.
 
 ### Bug fixes
 

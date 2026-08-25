@@ -33,7 +33,16 @@ pub enum ErrorCategory {
 /// it resolves to via [`REGISTRY`] is public (through [`MinigrafError::code`]).
 /// Kept internal so this enum is free to be reorganized without breaking any
 /// downstream `match`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deliberately does NOT derive `Debug`: this enum's variant count tracks
+/// every documented error code (130 once all six #277 category PRs land),
+/// and a derived `Debug` impl generates a per-variant string-literal match
+/// arm that's pure binary-size cost with no runtime use anywhere in this
+/// crate (nothing formats an `ErrorCode` with `{:?}` — [`CodedError`]'s own
+/// hand-written `Debug` below only needs the already-formatted `message`
+/// and the code string, not this enum). Keeps the project's <1MB binary
+/// size goal (see PHILOSOPHY.md) affordable as the registry grows.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCode {
     Prs001,
     Prs002,
@@ -114,15 +123,55 @@ pub(crate) enum ErrorCode {
     Prs077,
     Prs078,
     Prs079,
+    Qry001,
+    Qry002,
+    Qry003,
+    Qry004,
+    Qry005,
+    Qry006,
+    Qry007,
+    Qry008,
+    Qry009,
     Int000,
+    Stg001,
+    Stg002,
+    Stg003,
+    Stg004,
+    Stg005,
+    Stg006,
+    Stg007,
+    Stg008,
+    Stg009,
+    Stg010,
+    Stg011,
+    Stg012,
+    Stg013,
+    Stg014,
+    Stg015,
+    Stg016,
+    Stg017,
+    Stg018,
+    Stg019,
+    Stg020,
+    Stg021,
+    Stg022,
+    Stg023,
+    Stg024,
+    Stg025,
+    Stg026,
+    Stg027,
+    Wal001,
+    Wal002,
+    Wal003,
+    Wal004,
+    Wal005,
+    Wal006,
 }
 
 /// Single source of truth: (code, code string, message template, category).
 ///
 /// The message template is verified against `docs/ERROR_REFERENCE.md`'s
-/// "Error text" lines by the sync test in this module. The PRS (parser)
-/// category was the first migrated, in the #277 follow-up PR that wired up
-/// `src/query/datalog/parser.rs` — see the design spec.
+/// "Error text" lines by the sync test in this module.
 pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
     (
         ErrorCode::Prs001,
@@ -599,10 +648,262 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
         ErrorCategory::Parser,
     ),
     (
+        ErrorCode::Qry001,
+        "QRY-001",
+        "Invalid entity: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry002,
+        "QRY-002",
+        "Attribute must be a keyword",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry003,
+        "QRY-003",
+        "Cannot transact a pseudo-attribute",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry004,
+        "QRY-004",
+        "Invalid value: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry005,
+        "QRY-005",
+        "Transaction failed: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry006,
+        "QRY-006",
+        "Retraction failed: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry007,
+        "QRY-007",
+        "unknown predicate: '{}'",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry008,
+        "QRY-008",
+        "functions lock poisoned",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry009,
+        "QRY-009",
+        "rules lock poisoned",
+        ErrorCategory::Query,
+    ),
+    (
         ErrorCode::Int000,
         "INT-000",
         "unclassified internal error: {}",
         ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Stg001,
+        "STG-001",
+        "Invalid header: too short (got {} bytes, need 64)",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg002,
+        "STG-002",
+        "Invalid magic number: not a .graph file",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg003,
+        "STG-003",
+        "Invalid v4/v5/v6 header: expected at least 72 bytes, got {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg004,
+        "STG-004",
+        "Invalid v6 header: expected 80 bytes, got {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg005,
+        "STG-005",
+        "Invalid v7 header: expected 84 bytes, got {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg006,
+        "STG-006",
+        "Unsupported format version: {} (supported: 1-{})",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg007,
+        "STG-007",
+        "page_count must be greater than 0",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg008,
+        "STG-008",
+        "eavt_root_page ({}) must be less than page_count ({})",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg009,
+        "STG-009",
+        "fact_page_count ({}) cannot exceed page_count ({})",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg010,
+        "STG-010",
+        "Failed to read header from existing file: {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg011,
+        "STG-011",
+        "internal page has no children",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg012,
+        "STG-012",
+        "Expected index page at page {}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg013,
+        "STG-013",
+        "range_scan: expected leaf at page_id={}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg014,
+        "STG-014",
+        "Expected packed page (0x02), got 0x{}",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg015,
+        "STG-015",
+        "Record at slot {} extends beyond page boundary",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg016,
+        "STG-016",
+        "backend mutex poisoned",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg017,
+        "STG-017",
+        "page count overflow computing index_start",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg018,
+        "STG-018",
+        "page count overflow computing next_free",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg019,
+        "STG-019",
+        "page count overflow computing new_fact_start",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg020,
+        "STG-020",
+        "fact index {} exceeds u16::MAX",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg021,
+        "STG-021",
+        "page id overflow in checksum computation",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg022,
+        "STG-022",
+        "page id overflow writing fact pages",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg023,
+        "STG-023",
+        "page index {} exceeds u64::MAX",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg024,
+        "STG-024",
+        "pending fact count exceeds u64::MAX",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg025,
+        "STG-025",
+        "Database is already open in this process ({}). A second handle on one file would give each its own page table and corrupt both — reuse the existing handle instead. `Minigraf` is cheap to clone and all clones share the same database.",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg026,
+        "STG-026",
+        "Database is locked by another process ({}). The lock is held on the file itself and is released automatically when the holding process exits, so there is no lock file to clean up.",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Stg027,
+        "STG-027",
+        "Failed to lock database at {}: {}. This filesystem does not support file locking (common on NFSv3 without lockd, and on some FUSE mounts). Set `allow_unlocked` in `OpenOptions` to open anyway — that accepts the risk that concurrent writers corrupt the file.",
+        ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Wal001,
+        "WAL-001",
+        "Invalid WAL magic number: not a .wal file",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal002,
+        "WAL-002",
+        "Unsupported WAL version: {} (expected {})",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal003,
+        "WAL-003",
+        "Fact serialised size {} bytes exceeds maximum {} bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal004,
+        "WAL-004",
+        "fact serialised size {} exceeds u32 range",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal005,
+        "WAL-005",
+        "WAL num_facts exceeds platform usize",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal006,
+        "WAL-006",
+        "failed to delete WAL file {}: {}",
+        ErrorCategory::Wal,
     ),
 ];
 
@@ -663,13 +964,23 @@ pub(crate) fn format_template(template: &str, args: &[&dyn fmt::Display]) -> Str
 /// plumbing (`?`, `.context()`) unchanged. Recovered at the public API
 /// boundary by [`MinigrafError::from`]`(anyhow::Error)` walking the error
 /// chain for the first `CodedError` via `downcast_ref`.
-#[derive(Debug)]
 pub(crate) struct CodedError {
     code: ErrorCode,
     message: String,
 }
 
 impl CodedError {
+    /// `#[cold]`/`#[inline(never)]`: `bail_coded!`/`err_coded!` expand to a
+    /// call to this at every one of the (currently ~50, eventually ~250+
+    /// once all six #277 category PRs land) error call sites across the
+    /// crate. Error construction is by definition the cold path, so forcing
+    /// it out of line keeps the lookup + `format_template` call from being
+    /// duplicated inline at each one — pure binary-size cost for a path
+    /// that, unlike the argument-array construction immediately at the call
+    /// site (which still inlines, and is cheap), has no per-call-site
+    /// specialization to gain from inlining.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn new(code: ErrorCode, args: &[&dyn fmt::Display]) -> Self {
         let (_, template, _) = registry_entry(code);
         CodedError {
@@ -686,6 +997,21 @@ impl CodedError {
 impl fmt::Display for CodedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
+    }
+}
+
+// Hand-written rather than `#[derive(Debug)]`: a derive would require
+// `ErrorCode: Debug`, which is deliberately not implemented (see the
+// binary-size comment on `ErrorCode`). `std::error::Error` only requires
+// `Debug` to exist, not that it echo every field, so this reuses the
+// already-formatted `message` plus the stable code string instead.
+impl fmt::Debug for CodedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (code_str, ..) = registry_entry(self.code);
+        f.debug_struct("CodedError")
+            .field("code", &code_str)
+            .field("message", &self.message)
+            .finish()
     }
 }
 
@@ -846,7 +1172,138 @@ mod tests {
             );
         }
 
-        const ALL: &[ErrorCode] = &[
+        // No `_` arm: adding a new `ErrorCode` variant without listing it
+        // here is a compile error, which is the actual exhaustiveness
+        // guarantee this test provides.
+        fn exhaustive(code: ErrorCode) {
+            match code {
+                ErrorCode::Int000
+                | ErrorCode::Prs001
+                | ErrorCode::Prs002
+                | ErrorCode::Prs003
+                | ErrorCode::Prs004
+                | ErrorCode::Prs005
+                | ErrorCode::Prs006
+                | ErrorCode::Prs007
+                | ErrorCode::Prs008
+                | ErrorCode::Prs009
+                | ErrorCode::Prs010
+                | ErrorCode::Prs011
+                | ErrorCode::Prs012
+                | ErrorCode::Prs013
+                | ErrorCode::Prs014
+                | ErrorCode::Prs015
+                | ErrorCode::Prs016
+                | ErrorCode::Prs017
+                | ErrorCode::Prs018
+                | ErrorCode::Prs019
+                | ErrorCode::Prs020
+                | ErrorCode::Prs021
+                | ErrorCode::Prs022
+                | ErrorCode::Prs023
+                | ErrorCode::Prs024
+                | ErrorCode::Prs025
+                | ErrorCode::Prs026
+                | ErrorCode::Prs027
+                | ErrorCode::Prs028
+                | ErrorCode::Prs029
+                | ErrorCode::Prs030
+                | ErrorCode::Prs031
+                | ErrorCode::Prs032
+                | ErrorCode::Prs033
+                | ErrorCode::Prs034
+                | ErrorCode::Prs035
+                | ErrorCode::Prs036
+                | ErrorCode::Prs037
+                | ErrorCode::Prs038
+                | ErrorCode::Prs039
+                | ErrorCode::Prs040
+                | ErrorCode::Prs041
+                | ErrorCode::Prs042
+                | ErrorCode::Prs043
+                | ErrorCode::Prs044
+                | ErrorCode::Prs045
+                | ErrorCode::Prs046
+                | ErrorCode::Prs047
+                | ErrorCode::Prs048
+                | ErrorCode::Prs049
+                | ErrorCode::Prs050
+                | ErrorCode::Prs051
+                | ErrorCode::Prs052
+                | ErrorCode::Prs053
+                | ErrorCode::Prs054
+                | ErrorCode::Prs055
+                | ErrorCode::Prs056
+                | ErrorCode::Prs057
+                | ErrorCode::Prs058
+                | ErrorCode::Prs059
+                | ErrorCode::Prs060
+                | ErrorCode::Prs061
+                | ErrorCode::Prs062
+                | ErrorCode::Prs063
+                | ErrorCode::Prs064
+                | ErrorCode::Prs065
+                | ErrorCode::Prs066
+                | ErrorCode::Prs067
+                | ErrorCode::Prs068
+                | ErrorCode::Prs069
+                | ErrorCode::Prs070
+                | ErrorCode::Prs071
+                | ErrorCode::Prs072
+                | ErrorCode::Prs073
+                | ErrorCode::Prs074
+                | ErrorCode::Prs075
+                | ErrorCode::Prs076
+                | ErrorCode::Prs077
+                | ErrorCode::Prs078
+                | ErrorCode::Prs079
+                | ErrorCode::Qry001
+                | ErrorCode::Qry002
+                | ErrorCode::Qry003
+                | ErrorCode::Qry004
+                | ErrorCode::Qry005
+                | ErrorCode::Qry006
+                | ErrorCode::Qry007
+                | ErrorCode::Qry008
+                | ErrorCode::Qry009
+                | ErrorCode::Stg001
+                | ErrorCode::Stg002
+                | ErrorCode::Stg003
+                | ErrorCode::Stg004
+                | ErrorCode::Stg005
+                | ErrorCode::Stg006
+                | ErrorCode::Stg007
+                | ErrorCode::Stg008
+                | ErrorCode::Stg009
+                | ErrorCode::Stg010
+                | ErrorCode::Stg011
+                | ErrorCode::Stg012
+                | ErrorCode::Stg013
+                | ErrorCode::Stg014
+                | ErrorCode::Stg015
+                | ErrorCode::Stg016
+                | ErrorCode::Stg017
+                | ErrorCode::Stg018
+                | ErrorCode::Stg019
+                | ErrorCode::Stg020
+                | ErrorCode::Stg021
+                | ErrorCode::Stg022
+                | ErrorCode::Stg023
+                | ErrorCode::Stg024
+                | ErrorCode::Stg025
+                | ErrorCode::Stg026
+                | ErrorCode::Stg027
+                | ErrorCode::Wal001
+                | ErrorCode::Wal002
+                | ErrorCode::Wal003
+                | ErrorCode::Wal004
+                | ErrorCode::Wal005
+                | ErrorCode::Wal006 => assert_has_registry_entry(code),
+            }
+        }
+
+        for code in [
+            ErrorCode::Int000,
             ErrorCode::Prs001,
             ErrorCode::Prs002,
             ErrorCode::Prs003,
@@ -926,101 +1383,50 @@ mod tests {
             ErrorCode::Prs077,
             ErrorCode::Prs078,
             ErrorCode::Prs079,
-            ErrorCode::Int000,
-        ];
-        for &code in ALL {
-            assert_has_registry_entry(code);
-        }
-
-        // Compile-time exhaustiveness guard: fails to compile if a new
-        // ErrorCode variant is added without also adding it to ALL above —
-        // catching the mistake `registry_entry`'s `debug_assert!` cannot
-        // (it's compiled out in release builds) and that
-        // `registry_is_a_subset_of_error_reference_doc` cannot (it only
-        // walks REGISTRY, not ErrorCode).
-        fn _assert_all_variants_covered(code: ErrorCode) {
-            match code {
-                ErrorCode::Prs001 => {}
-                ErrorCode::Prs002 => {}
-                ErrorCode::Prs003 => {}
-                ErrorCode::Prs004 => {}
-                ErrorCode::Prs005 => {}
-                ErrorCode::Prs006 => {}
-                ErrorCode::Prs007 => {}
-                ErrorCode::Prs008 => {}
-                ErrorCode::Prs009 => {}
-                ErrorCode::Prs010 => {}
-                ErrorCode::Prs011 => {}
-                ErrorCode::Prs012 => {}
-                ErrorCode::Prs013 => {}
-                ErrorCode::Prs014 => {}
-                ErrorCode::Prs015 => {}
-                ErrorCode::Prs016 => {}
-                ErrorCode::Prs017 => {}
-                ErrorCode::Prs018 => {}
-                ErrorCode::Prs019 => {}
-                ErrorCode::Prs020 => {}
-                ErrorCode::Prs021 => {}
-                ErrorCode::Prs022 => {}
-                ErrorCode::Prs023 => {}
-                ErrorCode::Prs024 => {}
-                ErrorCode::Prs025 => {}
-                ErrorCode::Prs026 => {}
-                ErrorCode::Prs027 => {}
-                ErrorCode::Prs028 => {}
-                ErrorCode::Prs029 => {}
-                ErrorCode::Prs030 => {}
-                ErrorCode::Prs031 => {}
-                ErrorCode::Prs032 => {}
-                ErrorCode::Prs033 => {}
-                ErrorCode::Prs034 => {}
-                ErrorCode::Prs035 => {}
-                ErrorCode::Prs036 => {}
-                ErrorCode::Prs037 => {}
-                ErrorCode::Prs038 => {}
-                ErrorCode::Prs039 => {}
-                ErrorCode::Prs040 => {}
-                ErrorCode::Prs041 => {}
-                ErrorCode::Prs042 => {}
-                ErrorCode::Prs043 => {}
-                ErrorCode::Prs044 => {}
-                ErrorCode::Prs045 => {}
-                ErrorCode::Prs046 => {}
-                ErrorCode::Prs047 => {}
-                ErrorCode::Prs048 => {}
-                ErrorCode::Prs049 => {}
-                ErrorCode::Prs050 => {}
-                ErrorCode::Prs051 => {}
-                ErrorCode::Prs052 => {}
-                ErrorCode::Prs053 => {}
-                ErrorCode::Prs054 => {}
-                ErrorCode::Prs055 => {}
-                ErrorCode::Prs056 => {}
-                ErrorCode::Prs057 => {}
-                ErrorCode::Prs058 => {}
-                ErrorCode::Prs059 => {}
-                ErrorCode::Prs060 => {}
-                ErrorCode::Prs061 => {}
-                ErrorCode::Prs062 => {}
-                ErrorCode::Prs063 => {}
-                ErrorCode::Prs064 => {}
-                ErrorCode::Prs065 => {}
-                ErrorCode::Prs066 => {}
-                ErrorCode::Prs067 => {}
-                ErrorCode::Prs068 => {}
-                ErrorCode::Prs069 => {}
-                ErrorCode::Prs070 => {}
-                ErrorCode::Prs071 => {}
-                ErrorCode::Prs072 => {}
-                ErrorCode::Prs073 => {}
-                ErrorCode::Prs074 => {}
-                ErrorCode::Prs075 => {}
-                ErrorCode::Prs076 => {}
-                ErrorCode::Prs077 => {}
-                ErrorCode::Prs078 => {}
-                ErrorCode::Prs079 => {}
-                ErrorCode::Int000 => {}
-            }
+            ErrorCode::Qry001,
+            ErrorCode::Qry002,
+            ErrorCode::Qry003,
+            ErrorCode::Qry004,
+            ErrorCode::Qry005,
+            ErrorCode::Qry006,
+            ErrorCode::Qry007,
+            ErrorCode::Qry008,
+            ErrorCode::Qry009,
+            ErrorCode::Stg001,
+            ErrorCode::Stg002,
+            ErrorCode::Stg003,
+            ErrorCode::Stg004,
+            ErrorCode::Stg005,
+            ErrorCode::Stg006,
+            ErrorCode::Stg007,
+            ErrorCode::Stg008,
+            ErrorCode::Stg009,
+            ErrorCode::Stg010,
+            ErrorCode::Stg011,
+            ErrorCode::Stg012,
+            ErrorCode::Stg013,
+            ErrorCode::Stg014,
+            ErrorCode::Stg015,
+            ErrorCode::Stg016,
+            ErrorCode::Stg017,
+            ErrorCode::Stg018,
+            ErrorCode::Stg019,
+            ErrorCode::Stg020,
+            ErrorCode::Stg021,
+            ErrorCode::Stg022,
+            ErrorCode::Stg023,
+            ErrorCode::Stg024,
+            ErrorCode::Stg025,
+            ErrorCode::Stg026,
+            ErrorCode::Stg027,
+            ErrorCode::Wal001,
+            ErrorCode::Wal002,
+            ErrorCode::Wal003,
+            ErrorCode::Wal004,
+            ErrorCode::Wal005,
+            ErrorCode::Wal006,
+        ] {
+            exhaustive(code);
         }
     }
 
@@ -1047,7 +1453,10 @@ mod tests {
         let coded = err
             .downcast_ref::<CodedError>()
             .expect("expected a CodedError");
-        assert_eq!(coded.code(), ErrorCode::Int000);
+        assert!(
+            coded.code() == ErrorCode::Int000,
+            "expected ErrorCode::Int000"
+        );
         assert_eq!(coded.to_string(), "unclassified internal error: boom");
     }
 
@@ -1057,7 +1466,10 @@ mod tests {
         let coded = err
             .downcast_ref::<CodedError>()
             .expect("expected a CodedError");
-        assert_eq!(coded.code(), ErrorCode::Int000);
+        assert!(
+            coded.code() == ErrorCode::Int000,
+            "expected ErrorCode::Int000"
+        );
     }
 
     #[test]

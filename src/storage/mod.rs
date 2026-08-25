@@ -13,6 +13,7 @@ pub mod index;
 pub mod packed_pages;
 pub mod persistent_facts;
 
+use crate::error::{ErrorCode, bail_coded};
 use anyhow::Result;
 
 /// Read a 4-byte little-endian u32 from `bytes` at `offset`.
@@ -200,10 +201,7 @@ impl FileHeader {
         // Both v3 (64 bytes) and v4/v5/v6 (72+ bytes) must pass at least 64-byte
         // validation before the version field is read.
         if bytes.len() < 64 {
-            anyhow::bail!(
-                "Invalid header: too short (got {} bytes, need 64)",
-                bytes.len()
-            );
+            bail_coded!(ErrorCode::Stg001, bytes.len());
         }
 
         let mut magic = [0u8; 4];
@@ -214,7 +212,7 @@ impl FileHeader {
         );
 
         if magic != MAGIC_NUMBER {
-            anyhow::bail!("Invalid magic number: not a .graph file");
+            bail_coded!(ErrorCode::Stg002);
         }
 
         let version = read_u32_le(bytes, 4)?;
@@ -245,15 +243,12 @@ impl FileHeader {
 
         // v4, v5, v6: need at least 72 bytes
         if bytes.len() < 72 {
-            anyhow::bail!(
-                "Invalid v4/v5/v6 header: expected at least 72 bytes, got {}",
-                bytes.len()
-            );
+            bail_coded!(ErrorCode::Stg003, bytes.len());
         }
 
         let fact_page_count = if version >= 6 {
             if bytes.len() < 80 {
-                anyhow::bail!("Invalid v6 header: expected 80 bytes, got {}", bytes.len());
+                bail_coded!(ErrorCode::Stg004, bytes.len());
             }
             read_u64_le(bytes, 72)?
         } else {
@@ -262,7 +257,7 @@ impl FileHeader {
 
         let header_checksum = if version >= 7 {
             if bytes.len() < 84 {
-                anyhow::bail!("Invalid v7 header: expected 84 bytes, got {}", bytes.len());
+                bail_coded!(ErrorCode::Stg005, bytes.len());
             }
             read_u32_le(bytes, 80)?
         } else {
@@ -305,29 +300,17 @@ impl FileHeader {
             anyhow::bail!("Invalid magic number");
         }
         if self.version < 1 || self.version > FORMAT_VERSION {
-            anyhow::bail!(
-                "Unsupported format version: {} (supported: 1-{})",
-                self.version,
-                FORMAT_VERSION
-            );
+            bail_coded!(ErrorCode::Stg006, self.version, FORMAT_VERSION);
         }
         // Validate logical relationships
         if self.page_count == 0 {
-            anyhow::bail!("page_count must be greater than 0");
+            bail_coded!(ErrorCode::Stg007);
         }
         if self.eavt_root_page != 0 && self.eavt_root_page >= self.page_count {
-            anyhow::bail!(
-                "eavt_root_page ({}) must be less than page_count ({})",
-                self.eavt_root_page,
-                self.page_count
-            );
+            bail_coded!(ErrorCode::Stg008, self.eavt_root_page, self.page_count);
         }
         if self.fact_page_count > self.page_count {
-            anyhow::bail!(
-                "fact_page_count ({}) cannot exceed page_count ({})",
-                self.fact_page_count,
-                self.page_count
-            );
+            bail_coded!(ErrorCode::Stg009, self.fact_page_count, self.page_count);
         }
         Ok(())
     }
@@ -609,5 +592,54 @@ mod tests {
         let mut h = FileHeader::new();
         h.version = 5;
         assert!(h.validate().is_ok());
+    }
+
+    // ══ #359: STG-0xx regression tests ═══════════════════════════════════
+    //
+    // STG-001/003/004/005 guard byte lengths (<64/<72/<80/<84) that the
+    // production `FileBackend` path never actually produces -- it always
+    // hands `FileHeader::from_bytes` a full `PAGE_SIZE` (4096-byte) buffer,
+    // whatever the real file's length beyond the minimum one page. These
+    // codes are only reachable by calling `FileHeader::from_bytes` directly
+    // with a short slice, which `storage` being crate-private makes
+    // possible only from inside the crate -- hence unit tests here rather
+    // than an integration test against the public `Minigraf` API.
+
+    #[test]
+    fn from_bytes_too_short_returns_stg_001() {
+        let bytes = vec![0u8; 10]; // < 64 bytes
+        let err = FileHeader::from_bytes(&bytes).expect_err("10 bytes is too short");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-001");
+    }
+
+    #[test]
+    fn from_bytes_v4_too_short_returns_stg_003() {
+        let mut bytes = vec![0u8; 70]; // >= 64, < 72
+        bytes[0..4].copy_from_slice(b"MGRF");
+        bytes[4..8].copy_from_slice(&4u32.to_le_bytes()); // version = 4
+        let err = FileHeader::from_bytes(&bytes).expect_err("70 bytes is too short for v4");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-003");
+    }
+
+    #[test]
+    fn from_bytes_v6_too_short_returns_stg_004() {
+        let mut bytes = vec![0u8; 75]; // >= 72, < 80
+        bytes[0..4].copy_from_slice(b"MGRF");
+        bytes[4..8].copy_from_slice(&6u32.to_le_bytes()); // version = 6
+        let err = FileHeader::from_bytes(&bytes).expect_err("75 bytes is too short for v6");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-004");
+    }
+
+    #[test]
+    fn from_bytes_v7_too_short_returns_stg_005() {
+        let mut bytes = vec![0u8; 82]; // >= 80, < 84
+        bytes[0..4].copy_from_slice(b"MGRF");
+        bytes[4..8].copy_from_slice(&7u32.to_le_bytes()); // version = 7
+        let err = FileHeader::from_bytes(&bytes).expect_err("82 bytes is too short for v7");
+        let coded: crate::error::MinigrafError = err.into();
+        assert_eq!(coded.code(), "STG-005");
     }
 }

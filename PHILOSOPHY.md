@@ -109,7 +109,11 @@ SQLite's success comes from a clear philosophy: be a library, not a server. Be s
 - Pure Rust implementation
 - Minimal dependency tree (currently: serde, uuid, anyhow)
 - No required system libraries (optional backends OK)
-- Target: <1MB binary for core engine
+- Target: ~1.2MB budget for core engine (raised from the original <1MB goal for
+  #277's structured error codes — 130 documented codes across 6 categories
+  cannot fit in 1MB even with opt-level="z", LTO, codegen-units=1, and
+  strip=symbols all already applied; see CI's `binary-size.yml` for the
+  enforced limit)
 - No runtime dependencies (no JVM, no Python, no Node.js)
 
 **Anti-pattern**: Requiring external services, libraries, or runtimes to function.
@@ -360,7 +364,7 @@ You'll know Minigraf has succeeded when:
 1. ✅ **Ubiquity**: Developers say "just use Minigraf" for embedded graph storage
 2. ✅ **Trust**: Known for never losing data, crash-safe, reliable
 3. ✅ **Simplicity**: New users are productive in under 5 minutes
-4. ✅ **Size**: Core binary under 1MB, minimal dependencies
+4. ✅ **Size**: Core binary within its ~1.2MB budget, minimal dependencies
 5. ✅ **Portability**: Runs everywhere from Raspberry Pi to browsers
 6. ✅ **Stability**: API hasn't broken in years
 7. ✅ **Documentation**: Comprehensive docs with examples

@@ -1478,7 +1478,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-001 Invalid entity
 
-**Error text**: `Invalid entity: "not-a-uuid"`
+**Error text**: `Invalid entity: {}`
 
 **Cause**: An entity ID in a `transact` fact could not be resolved. Entity IDs must be UUIDs (as `#uuid "..."` tagged literals), existing entity symbols, or values that can be resolved to a UUID at execution time.
 
@@ -1525,7 +1525,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-004 Invalid value
 
-**Error text**: `Invalid value: [1, 2, 3]`
+**Error text**: `Invalid value: {}`
 
 **Cause**: A value in a fact is of a type that Minigraf cannot store. Supported value types are: string, integer (i64), float (f64), boolean, UUID ref (`Value::Ref`), and keyword.
 
@@ -1541,7 +1541,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-005 Transaction failed
 
-**Error text**: `Transaction failed: write lock is poisoned`
+**Error text**: `Transaction failed: {}`
 
 **Cause**: The batch of facts could not be committed. This is a wrapper error — the nested reason message identifies the root cause, which is typically a storage error, lock poisoning, or WAL write failure.
 
@@ -1554,7 +1554,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-006 Retraction failed
 
-**Error text**: `Retraction failed: fact not found`
+**Error text**: `Retraction failed: {}`
 
 **Cause**: A retraction could not be applied. The nested reason message identifies the specific cause — the fact may not exist at the given transaction time, or a storage error occurred.
 
@@ -1567,7 +1567,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-007 Unknown predicate
 
-**Error text**: `unknown predicate: 'between?'`
+**Error text**: `unknown predicate: '{}'`
 
 **Cause**: A `:where` clause invoked a predicate (expression function) that is not built-in and has not been registered via `db.register_predicate()`.
 
@@ -1620,7 +1620,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-001 Invalid header: too short
 
-**Error text**: `Invalid header: too short (got 12 bytes, need 64)`
+**Error text**: `Invalid header: too short (got {} bytes, need 64)`
 
 **Cause**: The `.graph` file is truncated — shorter than the minimum header size. Happens if the file was partially written (e.g. a crash during the initial `save()`) or if a non-Minigraf file was passed by mistake.
 
@@ -1642,7 +1642,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-003 Invalid v4/v5/v6 header too short
 
-**Error text**: `Invalid v4/v5/v6 header: expected at least 72 bytes, got 40`
+**Error text**: `Invalid v4/v5/v6 header: expected at least 72 bytes, got {}`
 
 **Cause**: A file identified as format version 4, 5, or 6 is too short to hold a valid header of that version. The file is truncated at the header.
 
@@ -1653,7 +1653,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-004 Invalid v6 header too short
 
-**Error text**: `Invalid v6 header: expected 80 bytes, got 64`
+**Error text**: `Invalid v6 header: expected 80 bytes, got {}`
 
 **Cause**: A file identified as format version 6 is shorter than the required 80-byte v6 header. The file is truncated.
 
@@ -1664,7 +1664,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-005 Invalid v7 header too short
 
-**Error text**: `Invalid v7 header: expected 84 bytes, got 80`
+**Error text**: `Invalid v7 header: expected 84 bytes, got {}`
 
 **Cause**: A file identified as format version 7 (current format) is shorter than the required 84-byte header. The file is truncated.
 
@@ -1675,7 +1675,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-006 Unsupported format version
 
-**Error text**: `Unsupported format version: 8 (supported: 1-7)`
+**Error text**: `Unsupported format version: {} (supported: 1-{})`
 
 **Cause**: The file was written by a newer version of Minigraf than is currently installed. The format version number in the header is outside the range this library can read.
 
@@ -1697,7 +1697,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-008 eavt_root_page must be less than page_count
 
-**Error text**: `eavt_root_page (500) must be less than page_count (100)`
+**Error text**: `eavt_root_page ({}) must be less than page_count ({})`
 
 **Cause**: The EAVT B+tree root page index in the header points beyond the file's page count. The header is internally inconsistent — a sign of file corruption.
 
@@ -1708,7 +1708,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-009 fact_page_count cannot exceed page_count
 
-**Error text**: `fact_page_count (200) cannot exceed page_count (100)`
+**Error text**: `fact_page_count ({}) cannot exceed page_count ({})`
 
 **Cause**: The fact page count in the header is larger than the total page count. The header is internally inconsistent.
 
@@ -1719,7 +1719,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-010 Failed to read header from existing file
 
-**Error text**: `Failed to read header from existing file: permission denied`
+**Error text**: `Failed to read header from existing file: {}`
 
 **Cause**: A low-level I/O error prevented reading the file header. Common causes: file permissions, file moved or deleted between open and read, disk I/O error.
 
@@ -1741,7 +1741,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-012 Expected index page at page N
 
-**Error text**: `Expected index page at page 42`
+**Error text**: `Expected index page at page {}`
 
 **Cause**: The B+tree traversal expected an index page at a specific page number, but the page found has a different type tag. This indicates index corruption or file truncation.
 
@@ -1752,7 +1752,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-013 range_scan expected leaf
 
-**Error text**: `range_scan: expected leaf at page_id=87`
+**Error text**: `range_scan: expected leaf at page_id={}`
 
 **Cause**: A range scan of the B+tree expected a leaf page at a given position but found a non-leaf page. Indicates corruption of the B+tree structure.
 
@@ -1763,7 +1763,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-014 Expected packed page type
 
-**Error text**: `Expected packed page (0x02), got 0x01`
+**Error text**: `Expected packed page (0x02), got 0x{}`
 
 **Cause**: A page expected to contain packed facts has a different page type tag. Indicates that the page layout in the file does not match the header's page allocation records.
 
@@ -1774,7 +1774,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-015 Record extends beyond page boundary
 
-**Error text**: `Record at slot 14 extends beyond page boundary`
+**Error text**: `Record at slot {} extends beyond page boundary`
 
 **Cause**: A fact record at the given slot in a packed-facts page extends past the 4KB page boundary. This indicates corruption of the page's internal offset table.
 
@@ -1829,7 +1829,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-020 Fact index exceeds u16::MAX
 
-**Error text**: `fact index 65536 exceeds u16::MAX`
+**Error text**: `fact index {} exceeds u16::MAX`
 
 **Cause**: The number of facts on a single packed page exceeded 65535 (u16::MAX). This is a theoretical limit that should not be reached in practice — a single 4KB page holds roughly 20–30 facts.
 
@@ -1862,7 +1862,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-023 Page index exceeds u64::MAX
 
-**Error text**: `page index 18446744073709551616 exceeds u64::MAX`
+**Error text**: `page index {} exceeds u64::MAX`
 
 **Cause**: A page index computation produced a value larger than u64::MAX. This is practically unreachable — would require a database with more pages than u64 can represent.
 
@@ -1886,7 +1886,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-025 Database already open in this process
 
-**Error text**: `Database is already open in this process ({path}). A second handle on one file would give each its own page table and corrupt both — reuse the existing handle instead. \`Minigraf\` is cheap to clone and all clones share the same database.`
+**Error text**: `Database is already open in this process ({}). A second handle on one file would give each its own page table and corrupt both — reuse the existing handle instead. `Minigraf` is cheap to clone and all clones share the same database.`
 
 **Cause**: This process already holds an open handle on this file. Two `FileBackend` instances on one file each cache their own `header.page_count`, allocate new pages from that count, and bounds-check reads against it, so the two page tables diverge and produce intermittent `Page N out of bounds` errors.
 
@@ -1900,7 +1900,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-026 Database locked by another process
 
-**Error text**: `Database is locked by another process ({path}). The lock is held on the file itself and is released automatically when the holding process exits, so there is no lock file to clean up.`
+**Error text**: `Database is locked by another process ({}). The lock is held on the file itself and is released automatically when the holding process exits, so there is no lock file to clean up.`
 
 **Cause**: Another process holds the kernel file lock on this `.graph` file. Minigraf is single-writer: one process at a time. This is reported only after a bounded retry (up to ~375ms) rules out a transient `fork`-related false positive — see the Unreleased CHANGELOG entry on the bounded retry.
 
@@ -1915,7 +1915,7 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 ### STG-027 Filesystem does not support file locking
 
-**Error text**: `Failed to lock database at {path}: {e}. This filesystem does not support file locking (common on NFSv3 without lockd, and on some FUSE mounts). Set \`allow_unlocked\` in \`OpenOptions\` to open anyway — that accepts the risk that concurrent writers corrupt the file.`
+**Error text**: `Failed to lock database at {}: {}. This filesystem does not support file locking (common on NFSv3 without lockd, and on some FUSE mounts). Set `allow_unlocked` in `OpenOptions` to open anyway — that accepts the risk that concurrent writers corrupt the file.`
 
 **Cause**: The underlying filesystem rejected the lock outright. Common on NFSv3 mounts with no `lockd` running, and on some FUSE filesystems. Because the file must exist before it can be locked, this refusal can leave a 0-byte `.graph` file behind; the next open sees `is_new` and initialises normally.
 
@@ -1949,7 +1949,7 @@ The WAL is replayed on open and deleted on checkpoint.
 
 ### WAL-002 Unsupported WAL version
 
-**Error text**: `Unsupported WAL version: 3 (expected 2)`
+**Error text**: `Unsupported WAL version: {} (expected {})`
 
 **Cause**: The `.wal` file was written by a version of Minigraf with a different WAL format. This can occur when downgrading the library after a WAL was written by a newer version.
 
@@ -1957,11 +1957,11 @@ The WAL is replayed on open and deleted on checkpoint.
 - Delete the `.wal` file if it is from an incomplete or stale session (no data is lost — committed facts are in the `.graph` file).
 - If the WAL contains uncommitted in-flight data you need to recover, upgrade the library to the version that wrote the WAL before reopening.
 
-**Scenario**: A `.wal` file written by a pre-release version of Minigraf is opened with the stable release, which uses a different WAL version number.
+**Scenario**: A `.wal` file written by a pre-release version of Minigraf is opened with the stable release, which uses a different WAL version number — e.g. `Unsupported WAL version: 3 (expected 2)`.
 
 ### WAL-003 Fact serialised size exceeds maximum
 
-**Error text**: `Fact serialised size 524800 bytes exceeds maximum 524288 bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.`
+**Error text**: `Fact serialised size {} bytes exceeds maximum {} bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.`
 
 **Cause**: A single fact's serialised size exceeds the WAL entry limit (~512 KB). This typically means a `Value::String` attribute value contains very large content such as raw document text, a base64-encoded image, or binary data.
 
@@ -1979,7 +1979,7 @@ The WAL is replayed on open and deleted on checkpoint.
 
 ### WAL-004 Fact serialised size exceeds u32 range
 
-**Error text**: `fact serialised size 4294967297 exceeds u32 range`
+**Error text**: `fact serialised size {} exceeds u32 range`
 
 **Cause**: The serialised size of a single fact exceeds `u32::MAX` (~4 GB). This is practically unreachable — WAL-003's ~512 KB limit fires first.
 
@@ -1987,7 +1987,7 @@ The WAL is replayed on open and deleted on checkpoint.
 - This should not occur under normal operation.
 - If it does, file a bug.
 
-**Scenario**: An extreme edge case where the fact serialisation path bypassed the WAL-003 limit check, producing an impossibly large entry.
+**Scenario**: An extreme edge case where the fact serialisation path bypassed the WAL-003 limit check, producing an impossibly large entry — e.g. `fact serialised size 4294967297 exceeds u32 range`.
 
 ### WAL-005 WAL num_facts exceeds platform usize
 
@@ -2003,7 +2003,7 @@ The WAL is replayed on open and deleted on checkpoint.
 
 ### WAL-006 Failed to delete WAL file
 
-**Error text**: `failed to delete WAL file my-db.wal: permission denied`
+**Error text**: `failed to delete WAL file {}: {}`
 
 **Cause**: After a successful `checkpoint()`, Minigraf could not delete the sidecar `.wal` file. This is typically a file system permissions issue.
 
@@ -2011,7 +2011,7 @@ The WAL is replayed on open and deleted on checkpoint.
 - Check that the process has write access to the directory containing the `.graph` file (WAL deletion requires directory write permission, not just file write permission).
 - The `.wal` file is safe to delete manually — Minigraf will create a new one on the next write.
 
-**Scenario**: `db.checkpoint()` succeeds but the process lacks directory write permission, preventing deletion of `my-db.wal`.
+**Scenario**: `db.checkpoint()` succeeds but the process lacks directory write permission, preventing deletion of `my-db.wal` — e.g. `failed to delete WAL file my-db.wal: permission denied`.
 
 ---
 
