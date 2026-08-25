@@ -373,7 +373,7 @@ impl Minigraf {
         // Open the WAL writer only if the WAL file already exists from a previous session.
         // Otherwise, create it lazily on the first write.
         let wal = if wal_path.exists() {
-            Some(WalWriter::open_or_create(&wal_path, SyncMode::Full)?)
+            Some(WalWriter::open_or_create(&wal_path, opts.synchronous)?)
         } else {
             None
         };
@@ -1154,7 +1154,7 @@ impl<'a> WriteTransaction<'a> {
                 // Lazily open the WAL writer if not already open.
                 if wal.is_none() {
                     let wal_path = Minigraf::wal_path_for(db_path);
-                    *wal = Some(WalWriter::open_or_create(&wal_path, SyncMode::Full)?);
+                    *wal = Some(WalWriter::open_or_create(&wal_path, opts.synchronous)?);
                 }
 
                 let wal_writer = wal
