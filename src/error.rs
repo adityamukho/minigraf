@@ -217,10 +217,12 @@ impl From<anyhow::Error> for MinigrafError {
                 };
             }
         }
-        let message = err.to_string();
+        let message_text = err.to_string();
+        let (code_str, template, category) = registry_entry(ErrorCode::Int000);
+        let message = format_template(template, &[&message_text as &dyn fmt::Display]);
         MinigrafError {
-            category: ErrorCategory::Internal,
-            code: "INT-000",
+            category,
+            code: code_str,
             message,
             source: err,
         }
@@ -320,7 +322,10 @@ mod tests {
         let e: MinigrafError = anyhow_err.into();
         assert_eq!(e.code(), "INT-000");
         assert_eq!(e.category(), ErrorCategory::Internal);
-        assert_eq!(e.to_string(), "[INT-000] plain uncoded error");
+        assert_eq!(
+            e.to_string(),
+            "[INT-000] unclassified internal error: plain uncoded error"
+        );
     }
 
     #[test]
