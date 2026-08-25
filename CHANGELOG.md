@@ -72,6 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   create-then-lock ordering now creates before it can know the lock will be
   refused. Harmless — the next open sees `is_new` and initialises normally —
   but worth knowing if you inspect the filesystem after a failed open.
+- **`Minigraf`'s, `WriteTransaction`'s, and `PreparedQuery`'s public methods now
+  return `Result<T, MinigrafError>` instead of `anyhow::Result<T>`** (#277).
+  `MinigrafError` implements `std::error::Error` (so `?` still works against
+  `anyhow::Result`/`Box<dyn Error>` callers) and adds `.category() -> ErrorCategory`
+  and `.code() -> &'static str` for structured error matching. This lands the
+  foundation for issue #277; every error currently surfaces as the generic
+  `INT-000` code until each error category's follow-up PR wires up its real
+  `docs/ERROR_REFERENCE.md` codes.
+  Every error's `Display`/`to_string()` output now also carries a `[CODE] `
+  prefix (e.g. `[INT-000] unclassified internal error: ...`) that it did not
+  have before — a behavior change beyond the type signature. Anything that
+  string-matches error output is affected, including the interactive REPL's
+  printed error messages and all 7 language-binding repos (Python, Node,
+  WASM, Java, Android, Swift, C).
 
 ### Bug fixes
 

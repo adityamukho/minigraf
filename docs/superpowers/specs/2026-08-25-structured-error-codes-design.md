@@ -212,6 +212,36 @@ becomes the umbrella tracking issue and splits into:
 2. **PRS sub-issue/PR** — migrate all parser call sites to `bail_coded!`
    with their real PRS-0xx codes; add regression tests asserting the
    specific code comes back from `db.execute()` for each.
+
+   **Blocker discovered during the Foundation PR's final review, must be
+   resolved before this PR is planned in detail**: `src/query/datalog/
+   parser.rs` is NOT `anyhow`-based — every parser function, including
+   `pub fn parse_datalog_command(input: &str) -> Result<DatalogCommand,
+   String>` (118 `Err(...)` returns across the file), returns
+   `Result<_, String>`. `bail_coded!`/`err_coded!` expand to
+   `Err(anyhow::Error::new(CodedError::new(...)))`, which is a type error
+   inside any `Result<_, String>`-returning function — they cannot be used
+   as a drop-in replacement in `parser.rs` as originally assumed ("a
+   drop-in replacement for existing `bail!(...)`/`anyhow!(...)` call
+   sites" in the Call-site macros section above holds for every other
+   module, but not this one). PRS is 79 of the 130 documented codes —
+   the largest category and the very next PR, so this must be decided
+   before that PR's plan is written, not discovered mid-implementation.
+   Compounding it: `Minigraf::execute`/`WriteTransaction::execute`/
+   `Minigraf::prepare` in `src/db.rs` each call
+   `parse_datalog_command(input).map_err(|e| anyhow::anyhow!("{}", e))?`
+   — even if the parser produced a `CodedError` some other way, this
+   `map_err` stringifies it via `Display`, destroying the error chain at
+   exactly the boundary the code-detection in `MinigrafError::from`
+   depends on (the chain-walk would find nothing and silently fall back
+   to `INT-000`, defeating the whole PR). Two options to resolve before
+   PRS is planned: (a) change `parser.rs`'s error type to `anyhow::Error`
+   (or a new `CodedError`-carrying type) and drop the three stringifying
+   `map_err` calls in `db.rs`, or (b) add a parallel `String`-flavored
+   code-carrying mechanism for `parser.rs` specifically. (a) is simpler
+   and keeps one mechanism crate-wide; (b) avoids touching parser.rs's
+   error type but permanently duplicates the tagging machinery. No
+   decision made yet — flag for brainstorming when PRS is picked up.
 3. **STG sub-issue/PR** — storage/file-format call sites, STG-0xx.
 4. **WAL sub-issue/PR** — WAL call sites, WAL-0xx.
 5. **QRY sub-issue/PR** — query executor call sites, QRY-0xx.

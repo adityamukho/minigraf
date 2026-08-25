@@ -1,3 +1,4 @@
+use crate::error::MinigrafError;
 use crate::graph::FactStorage;
 use crate::graph::types::Value;
 use crate::query::datalog::executor::{DatalogExecutor, QueryResult};
@@ -98,7 +99,11 @@ impl PreparedQuery {
     /// # Errors
     /// - Missing bind value for a slot present in the query.
     /// - Type mismatch (e.g. `Val` supplied for an `:as-of` slot).
-    pub fn execute(&self, bindings: &[(&str, BindValue)]) -> Result<QueryResult> {
+    pub fn execute(&self, bindings: &[(&str, BindValue)]) -> Result<QueryResult, MinigrafError> {
+        self.execute_inner(bindings).map_err(MinigrafError::from)
+    }
+
+    fn execute_inner(&self, bindings: &[(&str, BindValue)]) -> Result<QueryResult> {
         let binding_map: HashMap<&str, &BindValue> =
             bindings.iter().map(|(name, val)| (*name, val)).collect();
 

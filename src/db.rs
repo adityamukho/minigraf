@@ -15,6 +15,7 @@ use crate::graph::types::{Fact, TxId, VALID_TIME_FOREVER};
 /// in any practical context, avoiding the collision that `0` would have with the Unix
 /// epoch (1970-01-01T00:00:00Z), which is a legitimate `valid_from` value.
 pub(crate) const VALID_FROM_USE_TX_TIME: i64 = i64::MIN;
+use crate::error::MinigrafError;
 use crate::graph::FactStorage;
 use crate::graph::types::Value;
 use crate::query::datalog::evaluator::DEFAULT_MAX_DERIVED_FACTS;
@@ -218,7 +219,7 @@ impl OpenOptions {
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
-    pub fn open_memory(self) -> Result<Minigraf> {
+    pub fn open_memory(self) -> Result<Minigraf, MinigrafError> {
         Minigraf::in_memory_with_options(self)
     }
 }
@@ -238,7 +239,7 @@ impl OpenOptionsWithPath {
     ///
     /// Returns an error if the file cannot be opened, the header is corrupt,
     /// or WAL replay fails.
-    pub fn open(self) -> Result<Minigraf> {
+    pub fn open(self) -> Result<Minigraf, MinigrafError> {
         Minigraf::open_with_options(self.path, self.opts)
     }
 }
@@ -359,7 +360,7 @@ impl Minigraf {
     /// Returns an error if the file cannot be opened, the header is corrupt,
     /// or WAL replay fails.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, MinigrafError> {
         Self::open_with_options(path, OpenOptions::default())
     }
 
@@ -370,7 +371,15 @@ impl Minigraf {
     /// Returns an error if the file cannot be opened, the header is corrupt,
     /// or WAL replay fails.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_with_options(path: impl AsRef<Path>, opts: OpenOptions) -> Result<Self> {
+    pub fn open_with_options(
+        path: impl AsRef<Path>,
+        opts: OpenOptions,
+    ) -> Result<Self, MinigrafError> {
+        Self::open_with_options_inner(path, opts).map_err(MinigrafError::from)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_with_options_inner(path: impl AsRef<Path>, opts: OpenOptions) -> Result<Self> {
         let db_path = path.as_ref().to_path_buf();
 
         // Open the main .graph file
@@ -417,7 +426,7 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
-    pub fn in_memory() -> Result<Self> {
+    pub fn in_memory() -> Result<Self, MinigrafError> {
         Self::in_memory_with_options(OpenOptions::default())
     }
 
@@ -429,7 +438,11 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
-    pub fn in_memory_with_options(opts: OpenOptions) -> Result<Self> {
+    pub fn in_memory_with_options(opts: OpenOptions) -> Result<Self, MinigrafError> {
+        Self::in_memory_with_options_inner(opts).map_err(MinigrafError::from)
+    }
+
+    fn in_memory_with_options_inner(opts: OpenOptions) -> Result<Self> {
         let backend = MemoryBackend::new();
         let pfs = PersistentFactStorage::new(backend, memory_page_cache_capacity(&opts))?;
         let fact_storage = pfs.storage().clone();
@@ -512,7 +525,11 @@ impl Minigraf {
     /// - Parsing fails.
     /// - Execution fails.
     /// - WAL write fails (file-backed databases).
-    pub fn execute(&self, input: &str) -> Result<QueryResult> {
+    pub fn execute(&self, input: &str) -> Result<QueryResult, MinigrafError> {
+        self.execute_inner(input).map_err(MinigrafError::from)
+    }
+
+    fn execute_inner(&self, input: &str) -> Result<QueryResult> {
         // Detect same-thread reentrant write (would deadlock on the Mutex).
         if is_write_tx_active() {
             bail!(
@@ -623,7 +640,11 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if a `WriteTransaction` is already active on **this thread**.
-    pub fn begin_write(&self) -> Result<WriteTransaction<'_>> {
+    pub fn begin_write(&self) -> Result<WriteTransaction<'_>, MinigrafError> {
+        self.begin_write_inner().map_err(MinigrafError::from)
+    }
+
+    fn begin_write_inner(&self) -> Result<WriteTransaction<'_>> {
         if is_write_tx_active() {
             bail!(
                 "a WriteTransaction is already in progress on this thread; use tx.execute() instead"
@@ -654,7 +675,11 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if the write lock is poisoned or the checkpoint I/O fails.
-    pub fn checkpoint(&self) -> Result<()> {
+    pub fn checkpoint(&self) -> Result<(), MinigrafError> {
+        self.checkpoint_inner().map_err(MinigrafError::from)
+    }
+
+    fn checkpoint_inner(&self) -> Result<()> {
         let mut ctx = self.inner.write_lock.lock().map_err(|_| {
             anyhow::anyhow!("write lock is poisoned; database may be in an inconsistent state")
         })?;
@@ -738,6 +763,13 @@ impl Minigraf {
     /// - The command is not a `(query ...)` — `transact`, `retract`, and `rule`
     ///   are not preparable.
     pub fn prepare(
+        &self,
+        query_str: &str,
+    ) -> Result<crate::query::datalog::prepared::PreparedQuery, MinigrafError> {
+        self.prepare_inner(query_str).map_err(MinigrafError::from)
+    }
+
+    fn prepare_inner(
         &self,
         query_str: &str,
     ) -> Result<crate::query::datalog::prepared::PreparedQuery> {
@@ -898,6 +930,20 @@ impl Minigraf {
         init: impl Fn() -> Acc + Send + Sync + 'static,
         step: impl Fn(&mut Acc, &Value) + Send + Sync + 'static,
         finalise: impl Fn(&Acc, usize) -> Value + Send + Sync + 'static,
+    ) -> Result<(), MinigrafError>
+    where
+        Acc: Any + Send + 'static,
+    {
+        self.register_aggregate_inner(name, init, step, finalise)
+            .map_err(MinigrafError::from)
+    }
+
+    fn register_aggregate_inner<Acc>(
+        &self,
+        name: &str,
+        init: impl Fn() -> Acc + Send + Sync + 'static,
+        step: impl Fn(&mut Acc, &Value) + Send + Sync + 'static,
+        finalise: impl Fn(&Acc, usize) -> Value + Send + Sync + 'static,
     ) -> Result<()>
     where
         Acc: Any + Send + 'static,
@@ -951,6 +997,15 @@ impl Minigraf {
     /// ).unwrap();
     /// ```
     pub fn register_predicate(
+        &self,
+        name: &str,
+        f: impl Fn(&Value) -> bool + Send + Sync + 'static,
+    ) -> Result<(), MinigrafError> {
+        self.register_predicate_inner(name, f)
+            .map_err(MinigrafError::from)
+    }
+
+    fn register_predicate_inner(
         &self,
         name: &str,
         f: impl Fn(&Value) -> bool + Send + Sync + 'static,
@@ -1008,7 +1063,11 @@ impl<'a> WriteTransaction<'a> {
     /// # Errors
     ///
     /// Returns an error if parsing or execution fails.
-    pub fn execute(&mut self, input: &str) -> Result<QueryResult> {
+    pub fn execute(&mut self, input: &str) -> Result<QueryResult, MinigrafError> {
+        self.execute_inner(input).map_err(MinigrafError::from)
+    }
+
+    fn execute_inner(&mut self, input: &str) -> Result<QueryResult> {
         let cmd = parse_datalog_command(input).map_err(|e| anyhow::anyhow!("{}", e))?;
 
         match cmd {
@@ -1094,7 +1153,11 @@ impl<'a> WriteTransaction<'a> {
     /// # Errors
     ///
     /// Returns an error if the WAL write or fact application fails.
-    pub fn commit(mut self) -> Result<()> {
+    pub fn commit(self) -> Result<(), MinigrafError> {
+        self.commit_inner().map_err(MinigrafError::from)
+    }
+
+    fn commit_inner(mut self) -> Result<()> {
         let facts_to_commit = std::mem::take(&mut self.pending_facts);
 
         if !facts_to_commit.is_empty() {

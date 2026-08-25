@@ -1,12 +1,15 @@
 # Minigraf Error Reference
 
 This document covers every user-facing error produced by the core Minigraf Rust library.
-Errors surface as `anyhow::Error` values returned from `db.execute()`, `db.prepare()`,
+Errors surface as `MinigrafError` values returned from `db.execute()`, `db.prepare()`,
 and related API methods.
 
-**Reference codes** (e.g. `PRS-001`) are documentation-only identifiers. They do not
-appear in runtime output today — runtime codes are tracked in
-[#277](https://github.com/project-minigraf/minigraf/issues/277).
+**Reference codes** (e.g. `PRS-001`) appear in runtime error output as
+`[CODE] message`, and programmatically via `MinigrafError::code()` /
+`MinigrafError::category()`. As of the [#277](https://github.com/project-minigraf/minigraf/issues/277)
+foundation PR, every runtime error carries a code — but until each
+category's follow-up migration PR lands, most still surface generically as
+`INT-000` rather than their documented code below.
 
 **Out of scope**: FFI/binding errors from `minigraf-python`, `minigraf-node`, and
 `minigraf-wasm` are handled in those repos.
@@ -147,6 +150,7 @@ appear in runtime output today — runtime codes are tracked in
 | API-007 | Only query commands can be prepared (rule) | Database API |
 | API-008 | Function registry lock poisoned | Database API |
 | API-009 | WAL not initialized | Database API |
+| INT-000 | Unclassified internal error | Internal |
 
 ---
 
@@ -2152,6 +2156,30 @@ db.execute("(rule [(ancestor ?x ?y) [?x :parent ?y]])")?;
 - File a bug report with the sequence of API calls that produced this error.
 
 **Scenario**: A code path in the library called a write operation before the WAL was set up during `Minigraf::open()`.
+
+---
+
+## INT — Internal Errors
+
+`INT-000` is the generic catch-all every runtime error falls back to until its
+call site is migrated to a specific structured code — see
+[#277](https://github.com/project-minigraf/minigraf/issues/277). Internal
+errors are invariant violations that should not be reachable through normal
+use of the public API. If you see one of these in practice, it likely
+indicates a bug in Minigraf itself; please
+[file an issue](https://github.com/project-minigraf/minigraf/issues).
+
+### INT-000 Unclassified internal error
+
+**Error text**: `unclassified internal error: {}`
+
+**Cause**: A `bail!`/`anyhow!` call site has not yet been migrated to a specific structured error code, or the error genuinely is an unreachable internal invariant violation.
+
+**Resolution**:
+- Read the wrapped message text (the `{}` above) for the underlying cause.
+- Match on message content rather than this code if you need long-term programmatic stability — `INT-000` is expected to cover fewer cases over time as call sites gain specific codes.
+
+**Scenario**: Any error not yet covered by a migrated `PRS-`/`STG-`/`WAL-`/`QRY-`/`API-` code.
 
 ---
 
