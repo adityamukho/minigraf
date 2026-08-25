@@ -1,6 +1,8 @@
 use super::types::*;
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::types::Value;
 use crate::temporal::parse_timestamp;
+use anyhow::{Result, bail};
 use uuid::Uuid;
 
 const MAX_STRING_LENGTH: usize = 1024 * 1024; // 1MB
@@ -29,7 +31,7 @@ enum Token {
 }
 
 /// Tokenize EDN input
-fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+fn tokenize(input: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
 
@@ -88,10 +90,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                         }
                     } else {
                         if string.len() >= MAX_STRING_LENGTH {
-                            return Err(format!(
-                                "String exceeds maximum length of {} bytes",
-                                MAX_STRING_LENGTH
-                            ));
+                            bail_coded!(ErrorCode::Prs007, MAX_STRING_LENGTH);
                         }
                         string.push(ch);
                         chars.next();
@@ -109,10 +108,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     // A keyword can never be a query variable, so there is no ambiguity.
                     if ch.is_alphanumeric() || ch == '/' || ch == '-' || ch == '_' || ch == '?' {
                         if keyword.len() >= MAX_KEYWORD_LENGTH {
-                            return Err(format!(
-                                "Keyword exceeds maximum length of {} bytes",
-                                MAX_KEYWORD_LENGTH
-                            ));
+                            bail_coded!(ErrorCode::Prs008, MAX_KEYWORD_LENGTH);
                         }
                         keyword.push(ch);
                         chars.next();
@@ -129,10 +125,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 while let Some(&ch) = chars.peek() {
                     if ch.is_alphanumeric() || ch == '-' {
                         if tag.len() >= MAX_SYMBOL_LENGTH {
-                            return Err(format!(
-                                "Tagged literal exceeds maximum length of {} bytes",
-                                MAX_SYMBOL_LENGTH
-                            ));
+                            bail_coded!(ErrorCode::Prs009, MAX_SYMBOL_LENGTH);
                         }
                         tag.push(ch);
                         chars.next();
@@ -152,14 +145,14 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                         let mut num_str = String::from("-");
                         let (is_float, num) = parse_number(&mut chars, &mut num_str)?;
                         if is_float {
-                            let f: f64 = num
-                                .parse()
-                                .map_err(|_| format!("Float literal out of range: {}", num))?;
+                            let f: f64 = num.parse().map_err(|_| {
+                                anyhow::anyhow!("Float literal out of range: {}", num)
+                            })?;
                             tokens.push(Token::Float(f));
                         } else {
-                            let i: i64 = num
-                                .parse()
-                                .map_err(|_| format!("Integer literal out of range: {}", num))?;
+                            let i: i64 = num.parse().map_err(|_| {
+                                anyhow::anyhow!("Integer literal out of range: {}", num)
+                            })?;
                             tokens.push(Token::Integer(i));
                         }
                     } else {
@@ -181,12 +174,12 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 if is_float {
                     let f: f64 = num
                         .parse()
-                        .map_err(|_| format!("Float literal out of range: {}", num))?;
+                        .map_err(|_| anyhow::anyhow!("Float literal out of range: {}", num))?;
                     tokens.push(Token::Float(f));
                 } else {
                     let i: i64 = num
                         .parse()
-                        .map_err(|_| format!("Integer literal out of range: {}", num))?;
+                        .map_err(|_| anyhow::anyhow!("Integer literal out of range: {}", num))?;
                     tokens.push(Token::Integer(i));
                 }
             }
@@ -196,10 +189,10 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 while let Some(&ch) = chars.peek() {
                     if ch.is_alphanumeric() || ch == '?' || ch == '_' || ch == '-' || ch == '/' {
                         if symbol.len() >= MAX_SYMBOL_LENGTH {
-                            return Err(format!(
+                            bail!(
                                 "Symbol exceeds maximum length of {} bytes",
                                 MAX_SYMBOL_LENGTH
-                            ));
+                            );
                         }
                         symbol.push(ch);
                         chars.next();
@@ -233,7 +226,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     chars.next();
                     tokens.push(Token::Symbol("!=".to_string()));
                 } else {
-                    return Err("Unexpected character: !".to_string());
+                    bail_coded!(ErrorCode::Prs002, '!');
                 }
             }
             // EDN line comment: skip from ';' to the next newline (or end of input)
@@ -252,10 +245,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 while let Some(&ch) = chars.peek() {
                     if ch.is_alphanumeric() || ch == '_' || ch == '-' {
                         if name.len() >= MAX_SYMBOL_LENGTH {
-                            return Err(format!(
-                                "Bind slot name exceeds maximum length of {} bytes",
-                                MAX_SYMBOL_LENGTH
-                            ));
+                            bail_coded!(ErrorCode::Prs074, MAX_SYMBOL_LENGTH);
                         }
                         name.push(ch);
                         chars.next();
@@ -264,15 +254,12 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     }
                 }
                 if name.is_empty() {
-                    return Err(
-                        "Bind slot '$' must be followed by an identifier (e.g. $entity)"
-                            .to_string(),
-                    );
+                    bail!("Bind slot '$' must be followed by an identifier (e.g. $entity)");
                 }
                 tokens.push(Token::BindSlot(name));
             }
             _ => {
-                return Err(format!("Unexpected character: {}", ch));
+                bail_coded!(ErrorCode::Prs002, ch);
             }
         }
     }
@@ -283,7 +270,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 fn parse_number(
     chars: &mut std::iter::Peekable<std::str::Chars>,
     num_str: &mut String,
-) -> Result<(bool, String), String> {
+) -> Result<(bool, String)> {
     let mut is_float = false;
 
     while let Some(&ch) = chars.peek() {
@@ -302,18 +289,15 @@ fn parse_number(
     Ok((is_float, num_str.clone()))
 }
 
-fn parse_symbol(
-    chars: &mut std::iter::Peekable<std::str::Chars>,
-    first: char,
-) -> Result<String, String> {
+fn parse_symbol(chars: &mut std::iter::Peekable<std::str::Chars>, first: char) -> Result<String> {
     let mut symbol = String::from(first);
     while let Some(&ch) = chars.peek() {
         if ch.is_alphanumeric() || ch == '?' || ch == '_' || ch == '-' || ch == '/' {
             if symbol.len() >= MAX_SYMBOL_LENGTH {
-                return Err(format!(
+                bail!(
                     "Symbol exceeds maximum length of {} bytes",
                     MAX_SYMBOL_LENGTH
-                ));
+                );
             }
             symbol.push(ch);
             chars.next();
@@ -350,7 +334,7 @@ impl Parser {
         Some(token)
     }
 
-    fn parse_map(&mut self) -> Result<EdnValue, String> {
+    fn parse_map(&mut self) -> Result<EdnValue> {
         self.advance(); // consume '{'
         let mut pairs = Vec::new();
 
@@ -364,24 +348,24 @@ impl Parser {
             pairs.push((key, val));
         }
 
-        Err("Unterminated map: missing '}'".to_string())
+        bail_coded!(ErrorCode::Prs006);
     }
 
-    fn parse_value(&mut self) -> Result<EdnValue, String> {
+    fn parse_value(&mut self) -> Result<EdnValue> {
         self.depth += 1;
         if self.depth > MAX_RECURSION_DEPTH {
             self.depth -= 1;
-            return Err(format!(
+            bail!(
                 "Exceeded maximum recursion depth of {}",
                 MAX_RECURSION_DEPTH
-            ));
+            );
         }
         let result = self.parse_value_inner();
         self.depth -= 1;
         result
     }
 
-    fn parse_value_inner(&mut self) -> Result<EdnValue, String> {
+    fn parse_value_inner(&mut self) -> Result<EdnValue> {
         match self.peek() {
             Some(Token::LeftParen) => self.parse_list(),
             Some(Token::LeftBracket) => self.parse_vector(),
@@ -391,42 +375,42 @@ impl Parser {
                     Ok(EdnValue::Keyword(k))
                 } else {
                     // peek confirmed Keyword variant; advance should match
-                    Err("internal parser error: expected keyword token".to_string())
+                    bail!("internal parser error: expected keyword token");
                 }
             }
             Some(Token::Symbol(_)) => {
                 if let Some(Token::Symbol(s)) = self.advance() {
                     Ok(EdnValue::Symbol(s))
                 } else {
-                    Err("internal parser error: expected symbol token".to_string())
+                    bail!("internal parser error: expected symbol token");
                 }
             }
             Some(Token::String(_)) => {
                 if let Some(Token::String(s)) = self.advance() {
                     Ok(EdnValue::String(s))
                 } else {
-                    Err("internal parser error: expected string token".to_string())
+                    bail!("internal parser error: expected string token");
                 }
             }
             Some(Token::Integer(_)) => {
                 if let Some(Token::Integer(i)) = self.advance() {
                     Ok(EdnValue::Integer(i))
                 } else {
-                    Err("internal parser error: expected integer token".to_string())
+                    bail!("internal parser error: expected integer token");
                 }
             }
             Some(Token::Float(_)) => {
                 if let Some(Token::Float(f)) = self.advance() {
                     Ok(EdnValue::Float(f))
                 } else {
-                    Err("internal parser error: expected float token".to_string())
+                    bail!("internal parser error: expected float token");
                 }
             }
             Some(Token::Boolean(_)) => {
                 if let Some(Token::Boolean(b)) = self.advance() {
                     Ok(EdnValue::Boolean(b))
                 } else {
-                    Err("internal parser error: expected boolean token".to_string())
+                    bail!("internal parser error: expected boolean token");
                 }
             }
             Some(Token::TaggedLiteral(_)) => {
@@ -436,16 +420,16 @@ impl Parser {
                         if let Some(Token::String(uuid_str)) = self.advance() {
                             match Uuid::parse_str(&uuid_str) {
                                 Ok(uuid) => Ok(EdnValue::Uuid(uuid)),
-                                Err(_) => Err("Invalid UUID".to_string()),
+                                Err(_) => bail_coded!(ErrorCode::Prs072),
                             }
                         } else {
-                            Err("Expected UUID string after #uuid tag".to_string())
+                            bail_coded!(ErrorCode::Prs071);
                         }
                     } else {
-                        Err(format!("Unknown tagged literal: #{}", tag))
+                        bail_coded!(ErrorCode::Prs073, tag);
                     }
                 } else {
-                    Err("internal parser error: expected tagged literal token".to_string())
+                    bail!("internal parser error: expected tagged literal token");
                 }
             }
             Some(Token::Nil) => {
@@ -456,15 +440,18 @@ impl Parser {
                 if let Some(Token::BindSlot(name)) = self.advance() {
                     Ok(EdnValue::BindSlot(name))
                 } else {
-                    Err("internal parser error: expected bind slot token".to_string())
+                    bail!("internal parser error: expected bind slot token");
                 }
             }
-            Some(token) => Err(format!("Unexpected token: {:?}", token)),
-            None => Err("Unexpected end of input".to_string()),
+            Some(token) => {
+                let repr = format!("{:?}", token);
+                bail_coded!(ErrorCode::Prs003, repr);
+            }
+            None => bail_coded!(ErrorCode::Prs001),
         }
     }
 
-    fn parse_vector(&mut self) -> Result<EdnValue, String> {
+    fn parse_vector(&mut self) -> Result<EdnValue> {
         self.advance(); // consume [
         let mut elements = Vec::new();
 
@@ -476,10 +463,10 @@ impl Parser {
             elements.push(self.parse_value()?);
         }
 
-        Err("Unclosed vector".to_string())
+        bail_coded!(ErrorCode::Prs004);
     }
 
-    fn parse_list(&mut self) -> Result<EdnValue, String> {
+    fn parse_list(&mut self) -> Result<EdnValue> {
         self.advance(); // consume (
         let mut elements = Vec::new();
 
@@ -491,26 +478,24 @@ impl Parser {
             elements.push(self.parse_value()?);
         }
 
-        Err("Unclosed list".to_string())
+        bail_coded!(ErrorCode::Prs005);
     }
 }
 
 /// Parse EDN input into EdnValue
-pub fn parse_edn(input: &str) -> Result<EdnValue, String> {
+pub fn parse_edn(input: &str) -> Result<EdnValue> {
     let tokens = tokenize(input)?;
     let mut parser = Parser::new(tokens);
     let value = parser.parse_value()?;
     if let Some(token) = parser.peek() {
-        return Err(format!(
-            "unexpected trailing input after a complete form: {:?}",
-            token
-        ));
+        let repr = format!("{:?}", token);
+        bail_coded!(ErrorCode::Prs077, repr);
     }
     Ok(value)
 }
 
 /// Parse a Datalog command from EDN
-pub fn parse_datalog_command(input: &str) -> Result<DatalogCommand, String> {
+pub fn parse_datalog_command(input: &str) -> Result<DatalogCommand> {
     let edn = parse_edn(input)?;
 
     match edn {
@@ -521,7 +506,7 @@ pub fn parse_datalog_command(input: &str) -> Result<DatalogCommand, String> {
             let command = match &elements[0] {
                 EdnValue::Symbol(s) => s.as_str(),
                 EdnValue::Keyword(k) => k.as_str(),
-                _ => return Err("Expected command symbol".to_string()),
+                _ => bail_coded!(ErrorCode::Prs010),
             };
 
             // SAFETY: elements has at least 1 element, so [1..] is valid (may be empty)
@@ -532,16 +517,16 @@ pub fn parse_datalog_command(input: &str) -> Result<DatalogCommand, String> {
                 "transact" => parse_transact(rest),
                 "retract" => parse_retract(rest),
                 "rule" => parse_rule(rest),
-                _ => Err(format!("Unknown command: {}", command)),
+                _ => bail_coded!(ErrorCode::Prs011, command),
             }
         }
-        _ => Err("Expected a list starting with a command symbol".to_string()),
+        _ => bail_coded!(ErrorCode::Prs012),
     }
 }
 
 /// Parse an aggregate expression list: (func-name ?var)
 /// e.g., [Symbol("count"), Symbol("?e")] → FindSpec::Aggregate { "count", "?e" }
-fn parse_aggregate(elems: &[EdnValue]) -> Result<FindSpec, String> {
+fn parse_aggregate(elems: &[EdnValue]) -> Result<FindSpec> {
     // Detect window function: contains ":over" keyword anywhere in elems
     let has_over = elems
         .iter()
@@ -551,10 +536,7 @@ fn parse_aggregate(elems: &[EdnValue]) -> Result<FindSpec, String> {
     }
 
     if elems.len() != 2 {
-        return Err(format!(
-            "Aggregate expression must have exactly 2 elements (func ?var), got {}",
-            elems.len()
-        ));
+        bail_coded!(ErrorCode::Prs024, elems.len());
     }
 
     // SAFETY: len == 2 check above guarantees indices 0 and 1 exist
@@ -562,20 +544,15 @@ fn parse_aggregate(elems: &[EdnValue]) -> Result<FindSpec, String> {
     let func_name = match &elems[0] {
         EdnValue::Symbol(s) => s.clone(),
         other => {
-            return Err(format!(
-                "Aggregate function name must be a symbol, got {:?}",
-                other
-            ));
+            let repr = format!("{:?}", other);
+            bail_coded!(ErrorCode::Prs025, repr);
         }
     };
 
     const WINDOW_ONLY: &[&str] = &["avg", "rank", "row-number"];
 
     if WINDOW_ONLY.contains(&func_name.as_str()) {
-        return Err(format!(
-            "'{}' is a window function and requires an ':over (...)' clause",
-            func_name
-        ));
+        bail_coded!(ErrorCode::Prs027, func_name);
     }
     // Unknown aggregate names are allowed — they are resolved at runtime as UDFs.
     // If no UDF with this name is registered, the executor returns an error.
@@ -584,7 +561,7 @@ fn parse_aggregate(elems: &[EdnValue]) -> Result<FindSpec, String> {
     #[allow(clippy::indexing_slicing)]
     let var = match &elems[1] {
         EdnValue::Symbol(s) if s.starts_with('?') => s.clone(),
-        _ => return Err("Aggregate argument must be a variable (starting with ?)".to_string()),
+        _ => bail_coded!(ErrorCode::Prs026),
     };
 
     Ok(FindSpec::Aggregate {
@@ -596,23 +573,20 @@ fn parse_aggregate(elems: &[EdnValue]) -> Result<FindSpec, String> {
 /// Parse a window function expression.
 /// Syntax: `(func ?var :over (:partition-by ?p :order-by ?o :desc))`
 /// For rank/row-number (no var): `(rank :over (:order-by ?o))`
-fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
+fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec> {
     if elems.is_empty() {
-        return Err("window expression cannot be empty".into());
+        bail_coded!(ErrorCode::Prs028);
     }
 
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
     let func_name = match &elems[0] {
         EdnValue::Symbol(s) => s.as_str(),
-        _ => return Err("window function name must be a symbol".into()),
+        _ => bail_coded!(ErrorCode::Prs029),
     };
 
     if matches!(func_name, "lag" | "lead") {
-        return Err(format!(
-            "'{}' is not supported in this version; lag/lead are planned for a future release",
-            func_name
-        ));
+        bail_coded!(ErrorCode::Prs030, func_name);
     }
 
     let func = match func_name {
@@ -624,10 +598,7 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
         "rank" => WindowFunc::Rank,
         "row-number" => WindowFunc::RowNumber,
         "count-distinct" | "sum-distinct" => {
-            return Err(format!(
-                "'{}' is not window-compatible and cannot be used with ':over'",
-                func_name
-            ));
+            bail_coded!(ErrorCode::Prs031, func_name);
         }
         other => WindowFunc::Udf(other.to_string()),
     };
@@ -637,10 +608,7 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
     let (var, over_keyword_idx) = match func {
         WindowFunc::Rank | WindowFunc::RowNumber => {
             if !matches!(elems.get(1), Some(EdnValue::Keyword(k)) if k == ":over") {
-                return Err(format!(
-                    "'{}' requires ':over' immediately after the function name (no variable argument)",
-                    func_name
-                ));
+                bail_coded!(ErrorCode::Prs034, func_name);
             }
             (None, 1usize)
         }
@@ -648,31 +616,25 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
             let var = match elems.get(1) {
                 Some(EdnValue::Symbol(s)) if s.starts_with('?') => s.clone(),
                 _ => {
-                    return Err(format!(
-                        "'{}' requires a variable argument (starting with ?) before ':over'",
-                        func_name
-                    ));
+                    bail_coded!(ErrorCode::Prs032, func_name);
                 }
             };
             if !matches!(elems.get(2), Some(EdnValue::Keyword(k)) if k == ":over") {
-                return Err(format!(
-                    "'{}' requires ':over' after the variable argument",
-                    func_name
-                ));
+                bail_coded!(ErrorCode::Prs033, func_name);
             }
             (Some(var), 2usize)
         }
     };
 
     if over_keyword_idx + 2 != elems.len() {
-        return Err("unexpected tokens after ':over' clause in window expression".into());
+        bail_coded!(ErrorCode::Prs036);
     }
 
     // Parse the :over clause list
     let over_list = match elems.get(over_keyword_idx + 1) {
         Some(EdnValue::List(l)) => l.as_slice(),
         _ => {
-            return Err("':over' must be followed by a list, e.g., (:order-by ?var)".to_string());
+            bail_coded!(ErrorCode::Prs035);
         }
     };
 
@@ -684,7 +646,7 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
     while j < over_list.len() {
         let item = over_list
             .get(j)
-            .ok_or_else(|| "unexpected end of :over clause".to_string())?;
+            .ok_or_else(|| anyhow::anyhow!("unexpected end of :over clause"))?;
         match item {
             EdnValue::Keyword(k) => match k.as_str() {
                 ":partition-by" => {
@@ -692,9 +654,7 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
                     partition_by = match over_list.get(j) {
                         Some(EdnValue::Symbol(s)) if s.starts_with('?') => Some(s.clone()),
                         _ => {
-                            return Err(
-                                "':partition-by' requires a variable (starting with ?)".into()
-                            );
+                            bail_coded!(ErrorCode::Prs037);
                         }
                     };
                 }
@@ -703,7 +663,7 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
                     order_by = match over_list.get(j) {
                         Some(EdnValue::Symbol(s)) if s.starts_with('?') => Some(s.clone()),
                         _ => {
-                            return Err("':order-by' requires a variable (starting with ?)".into());
+                            bail_coded!(ErrorCode::Prs038);
                         }
                     };
                 }
@@ -714,18 +674,19 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
                     order = Order::Asc;
                 }
                 other => {
-                    return Err(format!("unknown option in ':over' clause: '{}'", other));
+                    bail_coded!(ErrorCode::Prs039, other);
                 }
             },
             other => {
-                return Err(format!("unexpected element in ':over' clause: {:?}", other));
+                let repr = format!("{:?}", other);
+                bail_coded!(ErrorCode::Prs040, repr);
             }
         }
         j += 1;
     }
 
     let order_by =
-        order_by.ok_or_else(|| "':order-by' is required in the ':over' clause".to_string())?;
+        order_by.ok_or_else(|| anyhow::anyhow!("':order-by' is required in the ':over' clause"))?;
 
     Ok(FindSpec::Window(WindowSpec {
         func,
@@ -736,24 +697,21 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec, String> {
     }))
 }
 
-fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
+fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
     // Parse (query [:find ?x ?y :as-of N :valid-at "ts" :where [patterns...]])
     if elements.is_empty() {
-        return Err("Query requires a map argument".to_string());
+        bail_coded!(ErrorCode::Prs013);
     }
 
     if elements.len() > 1 {
-        return Err(format!(
-            "query takes (query [...]); found {} unexpected trailing argument(s)",
-            elements.len() - 1
-        ));
+        bail_coded!(ErrorCode::Prs078, elements.len() - 1);
     }
 
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
     let query_vector = elements[0]
         .as_vector()
-        .ok_or("Query argument must be a vector")?;
+        .ok_or_else(|| anyhow::anyhow!("Query argument must be a vector"))?;
 
     let mut find_specs: Vec<FindSpec> = Vec::new();
     let mut with_vars: Vec<String> = Vec::new();
@@ -768,7 +726,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     while i < query_vector.len() {
         let current_item = query_vector
             .get(i)
-            .ok_or_else(|| "unexpected end of query vector".to_string())?;
+            .ok_or_else(|| anyhow::anyhow!("unexpected end of query vector"))?;
         if let Some(keyword) = current_item.as_keyword() {
             match keyword {
                 ":as-of" => {
@@ -776,26 +734,25 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                     i += 1;
                     let as_of_val = query_vector
                         .get(i)
-                        .ok_or_else(|| ":as-of requires a value".to_string())?;
+                        .ok_or_else(|| err_coded!(ErrorCode::Prs014))?;
                     let as_of = match as_of_val {
                         EdnValue::Integer(n) if *n >= 0 => {
-                            let val = u64::try_from(*n)
-                                .map_err(|_| ":as-of counter must be non-negative".to_string())?;
+                            let val = u64::try_from(*n).map_err(|_| {
+                                anyhow::anyhow!(":as-of counter must be non-negative")
+                            })?;
                             AsOf::Counter(val)
                         }
                         EdnValue::Integer(n) => {
-                            return Err(format!(":as-of counter must be non-negative, got {}", n));
+                            bail_coded!(ErrorCode::Prs015, n);
                         }
                         EdnValue::String(s) => {
-                            let ts = parse_timestamp(s).map_err(|e| e.to_string())?;
+                            let ts = parse_timestamp(s)?;
                             AsOf::Timestamp(ts)
                         }
                         EdnValue::BindSlot(name) => AsOf::Slot(name.clone()),
                         other => {
-                            return Err(format!(
-                                ":as-of must be an integer (counter) or ISO 8601 string, got {:?}",
-                                other
-                            ));
+                            let repr = format!("{:?}", other);
+                            bail_coded!(ErrorCode::Prs016, repr);
                         }
                     };
                     query_as_of = Some(as_of);
@@ -806,19 +763,17 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                     i += 1;
                     let valid_at_val = query_vector
                         .get(i)
-                        .ok_or_else(|| ":valid-at requires a value".to_string())?;
+                        .ok_or_else(|| err_coded!(ErrorCode::Prs017))?;
                     let valid_at = match valid_at_val {
                         EdnValue::String(s) => {
-                            let ts = parse_timestamp(s).map_err(|e| e.to_string())?;
+                            let ts = parse_timestamp(s)?;
                             ValidAt::Timestamp(ts)
                         }
                         EdnValue::Keyword(k) if k == ":any-valid-time" => ValidAt::AnyValidTime,
                         EdnValue::BindSlot(name) => ValidAt::Slot(name.clone()),
                         other => {
-                            return Err(format!(
-                                ":valid-at must be an ISO 8601 string or :any-valid-time, got {:?}",
-                                other
-                            ));
+                            let repr = format!("{:?}", other);
+                            bail_coded!(ErrorCode::Prs018, repr);
                         }
                     };
                     query_valid_at = Some(valid_at);
@@ -834,12 +789,12 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                 }
                 ":max-derived-facts" => {
                     if query_max_derived_facts.is_some() {
-                        return Err("duplicate :max-derived-facts".to_string());
+                        bail!("duplicate :max-derived-facts");
                     }
                     i += 1;
                     let val = query_vector
                         .get(i)
-                        .ok_or_else(|| ":max-derived-facts requires a value".to_string())?;
+                        .ok_or_else(|| anyhow::anyhow!(":max-derived-facts requires a value"))?;
                     match val {
                         EdnValue::Integer(n) if *n >= 1 => {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -848,10 +803,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                             }
                         }
                         EdnValue::Integer(_) => {
-                            return Err(":max-derived-facts must be >= 1".to_string());
+                            bail!(":max-derived-facts must be >= 1");
                         }
                         _other => {
-                            return Err(":max-derived-facts must be a positive integer".to_string());
+                            bail!(":max-derived-facts must be a positive integer");
                         }
                     }
                     i += 1;
@@ -859,12 +814,12 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                 }
                 ":max-results" => {
                     if query_max_results.is_some() {
-                        return Err("duplicate :max-results".to_string());
+                        bail!("duplicate :max-results");
                     }
                     i += 1;
                     let val = query_vector
                         .get(i)
-                        .ok_or_else(|| ":max-results requires a value".to_string())?;
+                        .ok_or_else(|| anyhow::anyhow!(":max-results requires a value"))?;
                     match val {
                         EdnValue::Integer(n) if *n >= 1 => {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -873,10 +828,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                             }
                         }
                         EdnValue::Integer(_) => {
-                            return Err(":max-results must be >= 1".to_string());
+                            bail!(":max-results must be >= 1");
                         }
                         _other => {
-                            return Err(":max-results must be a positive integer".to_string());
+                            bail!(":max-results must be a positive integer");
                         }
                     }
                     i += 1;
@@ -886,9 +841,9 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                     // Collect ?-prefixed symbols until the next keyword or end of vector
                     i += 1;
                     while i < query_vector.len() {
-                        let with_item = query_vector
-                            .get(i)
-                            .ok_or_else(|| "unexpected end of query vector in :with".to_string())?;
+                        let with_item = query_vector.get(i).ok_or_else(|| {
+                            anyhow::anyhow!("unexpected end of query vector in :with")
+                        })?;
                         match with_item {
                             EdnValue::Symbol(s) if s.starts_with('?') => {
                                 with_vars.push(s.clone());
@@ -896,10 +851,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                             }
                             EdnValue::Keyword(_) => break,
                             other => {
-                                return Err(format!(
-                                    "':with' clause accepts only variables, got {:?}",
-                                    other
-                                ));
+                                bail!("':with' clause accepts only variables, got {:?}", other);
                             }
                         }
                     }
@@ -922,10 +874,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                     find_specs.push(parse_aggregate(elems)?);
                 }
                 other => {
-                    return Err(format!(
+                    bail!(
                         "Expected variable or aggregate expression in :find clause, got {:?}",
                         other
-                    ));
+                    );
                 }
             },
             Some(":where") => {
@@ -943,14 +895,13 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
                     let clause = parse_list_as_where_clause(rule_list, true)?;
                     where_clauses.push(clause);
                 } else {
-                    return Err(format!(
-                        "Expected pattern vector or rule invocation in :where clause, got {:?}",
-                        current_item
-                    ));
+                    let repr = format!("{:?}", current_item);
+                    bail_coded!(ErrorCode::Prs060, repr);
                 }
             }
             _ => {
-                return Err(format!("Unexpected element in query: {:?}", current_item));
+                let repr = format!("{:?}", current_item);
+                bail_coded!(ErrorCode::Prs061, repr);
             }
         }
 
@@ -971,12 +922,12 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
         if let FindSpec::Aggregate { var, .. } = spec
             && !outer_bound.contains(var)
         {
-            return Err(format!("Aggregate variable {} not bound in :where", var));
+            bail_coded!(ErrorCode::Prs023, var);
         }
     }
     for var in &with_vars {
         if !outer_bound.contains(var) {
-            return Err(format!("':with' variable {} not bound in :where", var));
+            bail_coded!(ErrorCode::Prs022, var);
         }
     }
     // :with without any aggregate is an error
@@ -985,7 +936,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
             .iter()
             .any(|s| matches!(s, FindSpec::Aggregate { .. }))
     {
-        return Err("':with' clause requires at least one aggregate in :find".to_string());
+        bail_coded!(ErrorCode::Prs021);
     }
 
     let mut query = DatalogQuery::new(find_specs, where_clauses);
@@ -997,10 +948,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     Ok(DatalogCommand::Query(query))
 }
 
-fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
+fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand> {
     // Parse (transact [facts]) or (transact {opts} [facts])
     if elements.is_empty() {
-        return Err("Transact requires a vector of facts".to_string());
+        bail_coded!(ErrorCode::Prs041);
     }
 
     // SAFETY: is_empty() check above guarantees index 0 exists
@@ -1010,42 +961,34 @@ fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     // Check if the first element is a map (transaction-level options)
     let (tx_valid_from, tx_valid_to, facts_element, consumed) = if first_element.is_map() {
         let map = first_element.as_map().ok_or_else(|| {
-            "internal error: is_map() true but as_map() returned None".to_string()
+            anyhow::anyhow!("internal error: is_map() true but as_map() returned None")
         })?;
         let (from, to) = parse_valid_time_map(map)?;
-        let facts_elem = elements.get(1).ok_or_else(|| {
-            "Transact with options requires a facts vector after the map".to_string()
-        })?;
+        let facts_elem = elements
+            .get(1)
+            .ok_or_else(|| err_coded!(ErrorCode::Prs048))?;
         (from, to, facts_elem, 2)
     } else {
         (None, None, first_element, 1)
     };
 
     if elements.len() > consumed {
-        return Err(format!(
-            "transact takes (transact [facts]) or (transact {{opts}} [facts]); found {} \
-             unexpected trailing argument(s) — the valid-time options map must come BEFORE \
-             the facts vector, not after",
-            elements.len() - consumed
-        ));
+        bail_coded!(ErrorCode::Prs075, elements.len() - consumed);
     }
 
     let facts_vector = facts_element
         .as_vector()
-        .ok_or("Transact argument must be a vector of facts")?;
+        .ok_or_else(|| err_coded!(ErrorCode::Prs042))?;
 
     let mut patterns = Vec::new();
     for fact in facts_vector {
         let fact_vec = fact
             .as_vector()
-            .ok_or("Each fact must be a vector [e a v] or [e a v {opts}]")?;
+            .ok_or_else(|| err_coded!(ErrorCode::Prs045))?;
 
         // A fact is [e a v] or [e a v {opts}]
         if fact_vec.len() < 3 {
-            return Err(format!(
-                "Fact must have at least 3 elements (E A V), got {}",
-                fact_vec.len()
-            ));
+            bail_coded!(ErrorCode::Prs046, fact_vec.len());
         }
 
         // SAFETY: len >= 3 check above guarantees indices 0, 1, 2 exist
@@ -1061,13 +1004,11 @@ fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
             match fact_vec.get(3) {
                 Some(EdnValue::Map(pairs)) => parse_valid_time_map(pairs)?,
                 Some(other) => {
-                    return Err(format!(
-                        "Optional 4th element of a fact must be a map {{:valid-from ... :valid-to ...}}, got {:?}",
-                        other
-                    ));
+                    let repr = format!("{:?}", other);
+                    bail_coded!(ErrorCode::Prs047, repr);
                 }
                 None => {
-                    return Err("unexpected end of fact vector".to_string());
+                    bail_coded!(ErrorCode::Prs049);
                 }
             }
         } else {
@@ -1095,9 +1036,7 @@ fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
 
 /// Parse a valid-time map `{:valid-from "ts" :valid-to "ts"}` into millisecond timestamps.
 /// Both keys are optional.
-fn parse_valid_time_map(
-    pairs: &[(EdnValue, EdnValue)],
-) -> Result<(Option<i64>, Option<i64>), String> {
+fn parse_valid_time_map(pairs: &[(EdnValue, EdnValue)]) -> Result<(Option<i64>, Option<i64>)> {
     let mut valid_from = None;
     let mut valid_to = None;
 
@@ -1107,31 +1046,27 @@ fn parse_valid_time_map(
                 let s = match val {
                     EdnValue::String(s) => s,
                     other => {
-                        return Err(format!(
-                            ":valid-from must be an ISO 8601 string, got {:?}",
-                            other
-                        ));
+                        let repr = format!("{:?}", other);
+                        bail_coded!(ErrorCode::Prs019, repr);
                     }
                 };
-                valid_from = Some(parse_timestamp(s).map_err(|e| e.to_string())?);
+                valid_from = Some(parse_timestamp(s)?);
             }
             Some(":valid-to") => {
                 let s = match val {
                     EdnValue::String(s) => s,
                     other => {
-                        return Err(format!(
-                            ":valid-to must be an ISO 8601 string, got {:?}",
-                            other
-                        ));
+                        let repr = format!("{:?}", other);
+                        bail_coded!(ErrorCode::Prs020, repr);
                     }
                 };
-                valid_to = Some(parse_timestamp(s).map_err(|e| e.to_string())?);
+                valid_to = Some(parse_timestamp(s)?);
             }
             _ => {
-                return Err(format!(
+                bail!(
                     "Unknown key in valid-time map: {:?}; expected :valid-from or :valid-to",
                     key
-                ));
+                );
             }
         }
     }
@@ -1139,38 +1074,35 @@ fn parse_valid_time_map(
     Ok((valid_from, valid_to))
 }
 
-fn parse_retract(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
+fn parse_retract(elements: &[EdnValue]) -> Result<DatalogCommand> {
     // Same structure as transact
     if elements.is_empty() {
-        return Err("Retract requires a vector of facts".to_string());
+        bail_coded!(ErrorCode::Prs043);
     }
 
     if elements.len() > 1 {
-        return Err(format!(
-            "retract takes (retract [facts]); found {} unexpected trailing argument(s)",
-            elements.len() - 1
-        ));
+        bail_coded!(ErrorCode::Prs076, elements.len() - 1);
     }
 
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
     let facts_vector = elements[0]
         .as_vector()
-        .ok_or("Retract argument must be a vector")?;
+        .ok_or_else(|| err_coded!(ErrorCode::Prs044))?;
 
     let mut patterns = Vec::new();
     for fact in facts_vector {
         let fact_vec = fact
             .as_vector()
-            .ok_or("Each fact must be a vector [e a v]")?;
-        patterns.push(Pattern::from_edn(fact_vec)?);
+            .ok_or_else(|| anyhow::anyhow!("Each fact must be a vector [e a v]"))?;
+        patterns.push(Pattern::from_edn(fact_vec).map_err(anyhow::Error::msg)?);
     }
 
     Ok(DatalogCommand::Retract(Transaction::new(patterns)))
 }
 
 /// Convert a single EDN token to an Expr leaf, or recurse for a nested list.
-fn parse_expr_arg(edn: &EdnValue) -> Result<Expr, String> {
+fn parse_expr_arg(edn: &EdnValue) -> Result<Expr> {
     match edn {
         EdnValue::Symbol(s) if s.starts_with('?') => Ok(Expr::Var(s.clone())),
         EdnValue::Integer(n) => Ok(Expr::Lit(Value::Integer(*n))),
@@ -1181,7 +1113,10 @@ fn parse_expr_arg(edn: &EdnValue) -> Result<Expr, String> {
         EdnValue::Keyword(k) => Ok(Expr::Lit(Value::Keyword(k.clone()))),
         EdnValue::List(inner) => parse_expr(inner),
         EdnValue::BindSlot(name) => Ok(Expr::Slot(name.clone())),
-        other => Err(format!("unsupported expression argument: {:?}", other)),
+        other => {
+            let repr = format!("{:?}", other);
+            bail_coded!(ErrorCode::Prs070, repr);
+        }
     }
 }
 
@@ -1189,22 +1124,25 @@ fn parse_expr_arg(edn: &EdnValue) -> Result<Expr, String> {
 ///
 /// For `matches?`, the second argument must be a string literal and is
 /// validated as a valid regex pattern at parse time.
-fn parse_expr(list: &[EdnValue]) -> Result<Expr, String> {
+fn parse_expr(list: &[EdnValue]) -> Result<Expr> {
     if list.is_empty() {
-        return Err("expression list cannot be empty".to_string());
+        bail_coded!(ErrorCode::Prs062);
     }
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
     let head = match &list[0] {
         EdnValue::Symbol(s) => s.as_str(),
-        other => return Err(format!("expression head must be a symbol, got {:?}", other)),
+        other => {
+            let repr = format!("{:?}", other);
+            bail_coded!(ErrorCode::Prs063, repr);
+        }
     };
 
     match head {
         // Unary type predicates
         "string?" | "integer?" | "float?" | "boolean?" | "nil?" => {
             if list.len() != 2 {
-                return Err(format!("{} takes exactly 1 argument", head));
+                bail_coded!(ErrorCode::Prs064, head);
             }
             let op = match head {
                 "string?" => UnaryOp::StringQ,
@@ -1224,7 +1162,7 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr, String> {
         "<" | ">" | "<=" | ">=" | "=" | "!=" | "+" | "-" | "*" | "/" | "starts-with?"
         | "ends-with?" | "contains?" | "matches?" => {
             if list.len() != 3 {
-                return Err(format!("{} takes exactly 2 arguments", head));
+                bail_coded!(ErrorCode::Prs065, head);
             }
             // matches? second arg must be a string literal; compile regex early.
             if head == "matches?" {
@@ -1235,8 +1173,9 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr, String> {
                 let rhs = parse_expr_arg(&list[2])?;
                 match &rhs {
                     Expr::Lit(Value::String(pattern)) => {
-                        let compiled = regex_lite::Regex::new(pattern)
-                            .map_err(|e| format!("invalid regex pattern {:?}: {}", pattern, e))?;
+                        let compiled = regex_lite::Regex::new(pattern).map_err(|e| {
+                            anyhow::anyhow!("invalid regex pattern {:?}: {}", pattern, e)
+                        })?;
                         let rhs_lit = Expr::Lit(Value::String(pattern.clone()));
                         return Ok(Expr::BinOp(
                             BinOp::Matches {
@@ -1248,7 +1187,7 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr, String> {
                         ));
                     }
                     _ => {
-                        return Err("matches? second argument must be a string literal".to_string());
+                        bail_coded!(ErrorCode::Prs066);
                     }
                 }
             }
@@ -1288,7 +1227,7 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr, String> {
                     Box::new(arg),
                 ))
             } else {
-                Err(format!("unknown expression operator: {}", other))
+                bail_coded!(ErrorCode::Prs067, other);
             }
         }
     }
@@ -1297,13 +1236,13 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr, String> {
 /// Parse a vector clause whose first element is a list: `[(expr)]` or `[(expr) ?out]`.
 ///
 /// Called from `:where` dispatch when `vec[0]` is an `EdnValue::List`.
-fn parse_expr_clause(vec: &[EdnValue]) -> Result<WhereClause, String> {
+fn parse_expr_clause(vec: &[EdnValue]) -> Result<WhereClause> {
     let first = vec
         .first()
-        .ok_or_else(|| "parse_expr_clause called with empty vector".to_string())?;
+        .ok_or_else(|| anyhow::anyhow!("parse_expr_clause called with empty vector"))?;
     let inner_list = match first {
         EdnValue::List(l) => l.as_slice(),
-        _ => return Err("parse_expr_clause called with non-list element 0".to_string()),
+        _ => bail!("parse_expr_clause called with non-list element 0"),
     };
     let expr = parse_expr(inner_list)?;
     let binding = match vec.len() {
@@ -1311,22 +1250,17 @@ fn parse_expr_clause(vec: &[EdnValue]) -> Result<WhereClause, String> {
         2 => {
             let second = vec
                 .get(1)
-                .ok_or_else(|| "unexpected end of expression clause".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of expression clause"))?;
             match second {
                 EdnValue::Symbol(s) if s.starts_with('?') => Some(s.clone()),
                 other => {
-                    return Err(format!(
-                        "expression output must be a ?variable, got {:?}",
-                        other
-                    ));
+                    let repr = format!("{:?}", other);
+                    bail_coded!(ErrorCode::Prs069, repr);
                 }
             }
         }
         n => {
-            return Err(format!(
-                "expression clause must be [(expr)] or [(expr) ?out], got {} elements",
-                n
-            ));
+            bail_coded!(ErrorCode::Prs068, n);
         }
     };
     Ok(WhereClause::Expr { expr, binding })
@@ -1334,9 +1268,9 @@ fn parse_expr_clause(vec: &[EdnValue]) -> Result<WhereClause, String> {
 
 /// Parse a list item (EDN List) appearing in a :where clause or rule body.
 /// Returns Err if the list is empty, has an unknown form, or contains nested `not`.
-fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<WhereClause, String> {
+fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<WhereClause> {
     if list.is_empty() {
-        return Err("Empty list in :where clause".to_string());
+        bail_coded!(ErrorCode::Prs050);
     }
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
@@ -1344,15 +1278,15 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
     match head {
         EdnValue::Symbol(s) if s == "not" => {
             if !allow_not {
-                return Err("(not ...) cannot appear inside another (not ...)".to_string());
+                bail_coded!(ErrorCode::Prs051);
             }
             if list.len() < 2 {
-                return Err("(not) requires at least one clause".to_string());
+                bail_coded!(ErrorCode::Prs052);
             }
             let mut inner = Vec::new();
             let rest = list
                 .get(1..)
-                .ok_or_else(|| "unexpected end of not clause".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of not clause"))?;
             for item in rest {
                 if let Some(vec) = item.as_vector() {
                     if matches!(vec.first(), Some(EdnValue::List(_))) {
@@ -1366,57 +1300,48 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
                     // Reject (or ...)/(or-join ...) inside not bodies
                     if matches!(inner_list.first(), Some(EdnValue::Symbol(s)) if s == "or" || s == "or-join")
                     {
-                        return Err(
-                            "(or)/(or-join) cannot appear inside (not)/(not-join)".to_string()
-                        );
+                        bail!("(or)/(or-join) cannot appear inside (not)/(not-join)");
                     }
                     // Recurse with allow_not=false to reject nested not
                     let clause = parse_list_as_where_clause(inner_list, false)?;
                     inner.push(clause);
                 } else {
-                    return Err(format!(
+                    bail!(
                         "expected pattern or rule invocation inside (not), got {:?}",
                         item
-                    ));
+                    );
                 }
             }
             Ok(WhereClause::Not(inner))
         }
         EdnValue::Symbol(s) if s == "not-join" => {
             if !allow_not {
-                return Err(
-                    "(not-join ...) cannot appear inside another (not ...) or (not-join ...)"
-                        .to_string(),
-                );
+                bail!("(not-join ...) cannot appear inside another (not ...) or (not-join ...)");
             }
             // Syntax: (not-join [?v1 ?v2 ...] clause1 clause2 ...)
             if list.len() < 3 {
-                return Err(
-                    "(not-join) requires a join-vars vector and at least one clause".to_string(),
-                );
+                bail_coded!(ErrorCode::Prs059);
             }
             let join_var_vec = match list.get(1) {
                 Some(EdnValue::Vector(v)) => v,
                 _ => {
-                    return Err(
-                        "(not-join) first argument must be a vector of join variables".to_string(),
-                    );
+                    bail!("(not-join) first argument must be a vector of join variables");
                 }
             };
             let join_vars: Vec<String> = join_var_vec
                 .iter()
                 .map(|v| match v {
                     EdnValue::Symbol(s) if s.starts_with('?') => Ok(s.clone()),
-                    _ => Err(format!(
+                    _ => Err(anyhow::anyhow!(
                         "(not-join) join variables must be logic variables, got {:?}",
                         v
                     )),
                 })
-                .collect::<Result<_, _>>()?;
+                .collect::<Result<_>>()?;
             let mut inner = Vec::new();
             let rest = list
                 .get(2..)
-                .ok_or_else(|| "unexpected end of not-join clause".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of not-join clause"))?;
             for item in rest {
                 if let Some(vec) = item.as_vector() {
                     if matches!(vec.first(), Some(EdnValue::List(_))) {
@@ -1430,18 +1355,16 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
                     // Reject (or ...)/(or-join ...) inside not-join bodies
                     if matches!(inner_list.first(), Some(EdnValue::Symbol(s)) if s == "or" || s == "or-join")
                     {
-                        return Err(
-                            "(or)/(or-join) cannot appear inside (not)/(not-join)".to_string()
-                        );
+                        bail!("(or)/(or-join) cannot appear inside (not)/(not-join)");
                     }
                     // allow_not=false to reject nested (not ...) or (not-join ...)
                     let clause = parse_list_as_where_clause(inner_list, false)?;
                     inner.push(clause);
                 } else {
-                    return Err(format!(
+                    bail!(
                         "expected pattern or rule invocation inside (not-join), got {:?}",
                         item
-                    ));
+                    );
                 }
             }
             Ok(WhereClause::NotJoin {
@@ -1451,12 +1374,12 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
         }
         EdnValue::Symbol(s) if s == "or" => {
             if list.len() < 2 {
-                return Err("(or) requires at least one branch".to_string());
+                bail_coded!(ErrorCode::Prs053);
             }
             let mut branches: Vec<Vec<WhereClause>> = Vec::new();
             let rest = list
                 .get(1..)
-                .ok_or_else(|| "unexpected end of or clause".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of or clause"))?;
             for item in rest {
                 let branch = parse_or_branch(item)?;
                 branches.push(branch);
@@ -1465,32 +1388,28 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
         }
         EdnValue::Symbol(s) if s == "or-join" => {
             if list.len() < 3 {
-                return Err(
-                    "(or-join) requires a join-vars vector and at least one branch".to_string(),
-                );
+                bail_coded!(ErrorCode::Prs054);
             }
             let join_var_vec = match list.get(1) {
                 Some(EdnValue::Vector(v)) => v,
                 _ => {
-                    return Err(
-                        "(or-join) first argument must be a vector of join variables".to_string(),
-                    );
+                    bail_coded!(ErrorCode::Prs055);
                 }
             };
             let join_vars: Vec<String> = join_var_vec
                 .iter()
                 .map(|v| match v {
                     EdnValue::Symbol(s) if s.starts_with('?') => Ok(s.clone()),
-                    _ => Err(format!(
-                        "(or-join) join variables must be logic variables, got {:?}",
-                        v
-                    )),
+                    _ => {
+                        let repr = format!("{:?}", v);
+                        Err(err_coded!(ErrorCode::Prs056, repr))
+                    }
                 })
-                .collect::<Result<_, _>>()?;
+                .collect::<Result<_>>()?;
             let mut branches: Vec<Vec<WhereClause>> = Vec::new();
             let rest = list
                 .get(2..)
-                .ok_or_else(|| "unexpected end of or-join clause".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of or-join clause"))?;
             for item in rest {
                 let branch = parse_or_branch(item)?;
                 branches.push(branch);
@@ -1503,17 +1422,17 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
         EdnValue::Symbol(predicate) => {
             let args = list
                 .get(1..)
-                .ok_or_else(|| "unexpected end of rule invocation".to_string())?
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of rule invocation"))?
                 .to_vec();
             Ok(WhereClause::RuleInvocation {
                 predicate: predicate.clone(),
                 args,
             })
         }
-        _ => Err(format!(
+        _ => bail!(
             "Rule invocation must start with predicate name (symbol), got {:?}",
             head
-        )),
+        ),
     }
 }
 
@@ -1522,12 +1441,12 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
 /// Detects `:db/*` keywords in the attribute position and wraps them in
 /// `AttributeSpec::Pseudo`. Rejects `:db/*` keywords in entity or value positions.
 /// Falls through to `Pattern::from_edn` for regular patterns.
-fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern, String> {
+fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern> {
     if vec.len() != 3 {
-        return Err(format!(
+        bail!(
             "Pattern must have exactly 3 elements (E A V), got {}",
             vec.len()
-        ));
+        );
     }
 
     // SAFETY: len == 3 check above guarantees indices 0, 1, 2 exist
@@ -1536,10 +1455,7 @@ fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern, String> {
     if let EdnValue::Keyword(k) = &vec[0]
         && PseudoAttr::from_keyword(k).is_some()
     {
-        return Err(format!(
-            "pseudo-attribute {} is not valid in entity position",
-            k
-        ));
+        bail!("pseudo-attribute {} is not valid in entity position", k);
     }
 
     // Reject :db/* in value position
@@ -1547,10 +1463,7 @@ fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern, String> {
     if let EdnValue::Keyword(k) = &vec[2]
         && PseudoAttr::from_keyword(k).is_some()
     {
-        return Err(format!(
-            "pseudo-attribute {} is not valid in value position",
-            k
-        ));
+        bail!("pseudo-attribute {} is not valid in value position", k);
     }
 
     // Detect pseudo-attribute in attribute position
@@ -1562,7 +1475,7 @@ fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern, String> {
         return Ok(Pattern::pseudo(vec[0].clone(), pseudo, vec[2].clone()));
     }
 
-    Pattern::from_edn(vec)
+    Pattern::from_edn(vec).map_err(anyhow::Error::msg)
 }
 
 /// Parse a single branch of an (or ...) or (or-join ...) clause.
@@ -1570,18 +1483,18 @@ fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern, String> {
 /// A branch is either:
 /// - A single clause: `[pattern]` or `(rule-invocation)` or `[(expr)]`
 /// - A grouped list of clauses: `(and clause1 clause2 ...)`
-fn parse_or_branch(item: &EdnValue) -> Result<Vec<WhereClause>, String> {
+fn parse_or_branch(item: &EdnValue) -> Result<Vec<WhereClause>> {
     match item {
         EdnValue::List(inner) if matches!(inner.first(), Some(EdnValue::Symbol(s)) if s == "and") =>
         {
             // (and clause1 clause2 ...) — multi-clause branch
             if inner.len() < 2 {
-                return Err("(and) inside or/or-join requires at least one clause".to_string());
+                bail_coded!(ErrorCode::Prs058);
             }
             let mut clauses = Vec::new();
             let rest = inner
                 .get(1..)
-                .ok_or_else(|| "unexpected end of and clause".to_string())?;
+                .ok_or_else(|| anyhow::anyhow!("unexpected end of and clause"))?;
             for clause_item in rest {
                 clauses.push(parse_or_branch_item(clause_item)?);
             }
@@ -1595,7 +1508,7 @@ fn parse_or_branch(item: &EdnValue) -> Result<Vec<WhereClause>, String> {
 }
 
 /// Parse a single clause item within an or branch.
-fn parse_or_branch_item(item: &EdnValue) -> Result<WhereClause, String> {
+fn parse_or_branch_item(item: &EdnValue) -> Result<WhereClause> {
     match item {
         EdnValue::Vector(vec) => {
             if matches!(vec.first(), Some(EdnValue::List(_))) {
@@ -1608,7 +1521,7 @@ fn parse_or_branch_item(item: &EdnValue) -> Result<WhereClause, String> {
             // allow_not=true: or branches can contain not/not-join/or/or-join
             parse_list_as_where_clause(inner_list, true)
         }
-        _ => Err(format!("expected clause inside or branch, got {:?}", item)),
+        _ => bail!("expected clause inside or branch, got {:?}", item),
     }
 }
 
@@ -1697,15 +1610,15 @@ fn vars_in_not(clause: &WhereClause) -> Vec<String> {
 fn check_not_safety(
     clauses: &[WhereClause],
     outer_bound: &std::collections::HashSet<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     for clause in clauses {
         if let WhereClause::Not(_) = clause {
             for var in vars_in_not(clause) {
                 if !outer_bound.contains(&var) {
-                    return Err(format!(
+                    bail!(
                         "variable {} in (not ...) is not bound by any outer clause",
                         var
-                    ));
+                    );
                 }
             }
         }
@@ -1719,15 +1632,15 @@ fn check_not_safety(
 fn check_not_join_safety(
     clauses: &[WhereClause],
     outer_bound: &std::collections::HashSet<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     for clause in clauses {
         if let WhereClause::NotJoin { join_vars, .. } = clause {
             for var in join_vars {
                 if !var.starts_with("?_") && !outer_bound.contains(var) {
-                    return Err(format!(
+                    bail!(
                         "join variable {} in (not-join ...) is not bound by any outer clause",
                         var
-                    ));
+                    );
                 }
             }
         }
@@ -1754,23 +1667,23 @@ fn expr_vars(expr: &Expr) -> Vec<String> {
 /// an earlier clause. Binding-form Expr clauses add their output var to scope.
 ///
 /// Called for both query `:where` clauses and rule body clauses.
-fn check_expr_safety(clauses: &[WhereClause]) -> Result<(), String> {
+fn check_expr_safety(clauses: &[WhereClause]) -> Result<()> {
     check_expr_safety_with_bound(clauses, &mut std::collections::HashSet::new())
 }
 
 fn check_expr_safety_with_bound(
     clauses: &[WhereClause],
     bound: &mut std::collections::HashSet<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     for clause in clauses {
         match clause {
             WhereClause::Expr { expr, binding } => {
                 for var in expr_vars(expr) {
                     if !bound.contains(&var) {
-                        return Err(format!(
+                        bail!(
                             "variable {} in expression clause is not bound by any earlier clause",
                             var
-                        ));
+                        );
                     }
                 }
                 if let Some(out) = binding {
@@ -1802,10 +1715,7 @@ fn check_expr_safety_with_bound(
                     // SAFETY: windows(2) yields slices of exactly 2 elements
                     #[allow(clippy::indexing_slicing)]
                     if branch_new_var_sets.windows(2).any(|w| w[0] != w[1]) {
-                        return Err(
-                            "all branches of (or ...) must introduce the same set of new variables"
-                                .to_string(),
-                        );
+                        bail_coded!(ErrorCode::Prs057);
                     }
                     if let Some(new_vars) = branch_new_var_sets.first() {
                         for var in new_vars {
@@ -1820,10 +1730,10 @@ fn check_expr_safety_with_bound(
             } => {
                 for var in join_vars {
                     if !var.starts_with("?_") && !bound.contains(var) {
-                        return Err(format!(
+                        bail!(
                             "join variable {} in (or-join ...) is not bound by any earlier clause",
                             var
-                        ));
+                        );
                     }
                 }
                 for branch in branches {
@@ -1842,19 +1752,16 @@ fn check_expr_safety_with_bound(
     Ok(())
 }
 
-fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
+fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand> {
     // Rule syntax: (rule [(predicate ?args) [pattern1] [pattern2] ...])
     // elements[0] = Vector with head (list) + body (patterns/rule calls)
 
     if elements.is_empty() {
-        return Err("Rule must have a body".to_string());
+        bail!("Rule must have a body");
     }
 
     if elements.len() > 1 {
-        return Err(format!(
-            "rule takes (rule [...]); found {} unexpected trailing argument(s)",
-            elements.len() - 1
-        ));
+        bail_coded!(ErrorCode::Prs079, elements.len() - 1);
     }
 
     // Parse the rule body (single vector containing head + body patterns)
@@ -1862,10 +1769,10 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     #[allow(clippy::indexing_slicing)]
     let body_vec = elements[0]
         .as_vector()
-        .ok_or("Rule body must be a vector")?;
+        .ok_or_else(|| anyhow::anyhow!("Rule body must be a vector"))?;
 
     if body_vec.is_empty() {
-        return Err("Rule body cannot be empty".to_string());
+        bail!("Rule body cannot be empty");
     }
 
     // First element is the head (must be a list)
@@ -1873,10 +1780,10 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     #[allow(clippy::indexing_slicing)]
     let head_list = body_vec[0]
         .as_list()
-        .ok_or("Rule head must be a list: (predicate ?args)")?;
+        .ok_or_else(|| anyhow::anyhow!("Rule head must be a list: (predicate ?args)"))?;
 
     if head_list.is_empty() {
-        return Err("Rule head cannot be empty".to_string());
+        bail!("Rule head cannot be empty");
     }
 
     // Verify head starts with a symbol (predicate name)
@@ -1884,7 +1791,7 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
     #[allow(clippy::indexing_slicing)]
     match &head_list[0] {
         EdnValue::Symbol(_) => {}
-        _ => return Err("Rule head must start with a symbol (predicate name)".to_string()),
+        _ => bail!("Rule head must start with a symbol (predicate name)"),
     }
 
     // Rest of body_vec are patterns, rule invocations, or (not ...) clauses
@@ -1905,15 +1812,15 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand, String> {
             let clause = parse_list_as_where_clause(list, true)?;
             body_clauses.push(clause);
         } else {
-            return Err(format!(
+            bail!(
                 "Rule body clause must be a vector (pattern) or list (rule invocation / not), got {:?}",
                 item
-            ));
+            );
         }
     }
 
     if body_clauses.is_empty() {
-        return Err("Rule must have at least one pattern or rule invocation in body".to_string());
+        bail!("Rule must have at least one pattern or rule invocation in body");
     }
 
     // Safety check: variables in (not ...) must be bound by the rule head or outer body clauses
@@ -1981,7 +1888,12 @@ mod tests {
         let long_string = "\"".to_string() + &"x".repeat(MAX_STRING_LENGTH + 1);
         let result = tokenize(&long_string);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum length"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum length")
+        );
     }
 
     #[test]
@@ -1989,7 +1901,12 @@ mod tests {
         let long_keyword = ":".to_string() + &"x".repeat(MAX_KEYWORD_LENGTH + 1);
         let result = tokenize(&long_keyword);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum length"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum length")
+        );
     }
 
     #[test]
@@ -1997,7 +1914,7 @@ mod tests {
         let deeply_nested = "(".repeat(10_000);
         let result = parse_edn(&deeply_nested);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("recursion depth"));
+        assert!(result.unwrap_err().to_string().contains("recursion depth"));
     }
 
     #[test]
@@ -2034,7 +1951,12 @@ mod tests {
         let long_symbol = "x".repeat(MAX_SYMBOL_LENGTH + 1);
         let result = tokenize(&long_symbol);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum length"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum length")
+        );
     }
 
     #[test]
@@ -2042,7 +1964,12 @@ mod tests {
         let long_tag = "#".to_string() + &"x".repeat(MAX_SYMBOL_LENGTH + 1);
         let result = tokenize(&long_tag);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum length"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum length")
+        );
     }
 
     #[test]
@@ -2365,7 +2292,7 @@ mod tests {
         let result =
             parse_datalog_command("(query [:find ?n :as-of -1 :where [?e :person/name ?n]])");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("non-negative"));
+        assert!(result.unwrap_err().to_string().contains("non-negative"));
     }
 
     #[test]
@@ -2433,7 +2360,7 @@ mod tests {
             r#"(query [:find ?n :as-of "2024-01-15T10:00:00+05:30" :where [?e :person/name ?n]])"#,
         );
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("timezone offsets are not supported"),
             "error was: {}",
@@ -2466,7 +2393,7 @@ mod tests {
             r#"(transact [[:alice :employment/status :active]] {:valid-from "2023-01-01"})"#,
         );
         assert!(result.is_err(), "expected a parse error");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("unexpected") || msg.contains("trailing"),
             "error should mention the unexpected trailing argument, was: {}",
@@ -2553,7 +2480,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a :b] :max-derived-facts 0])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err(), "0 should be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains(":max-derived-facts must be >= 1"),
             "wrong error: {}",
@@ -2566,7 +2493,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a :b] :max-results 0])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err(), "0 should be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains(":max-results must be >= 1"),
             "wrong error: {}",
@@ -2580,7 +2507,7 @@ mod tests {
             r#"(query [:find ?x :where [?x :a :b] :max-derived-facts 100 :max-derived-facts 200])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err(), "duplicate key should be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("duplicate :max-derived-facts"),
             "wrong error: {}",
@@ -2593,7 +2520,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a :b] :max-results 100 :max-results 200])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err(), "duplicate key should be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("duplicate :max-results"),
             "wrong error: {}",
@@ -2606,7 +2533,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a :b] :max-derived-facts "a lot"])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err(), "non-integer should be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains(":max-derived-facts must be a positive integer"),
             "wrong error: {}",
@@ -2619,7 +2546,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a :b] :max-results "a lot"])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err(), "non-integer should be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains(":max-results must be a positive integer"),
             "wrong error: {}",
@@ -2636,7 +2563,7 @@ mod tests {
             result.is_err(),
             "trailing tokens after a complete form must be rejected"
         );
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("unexpected trailing input"),
             "wrong error: {}",
@@ -2653,7 +2580,7 @@ mod tests {
             result.is_err(),
             "trailing tokens after a complete command must be rejected"
         );
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("unexpected trailing input"),
             "wrong error: {}",
@@ -2671,7 +2598,7 @@ mod tests {
             result.is_err(),
             "extra trailing argument to query must be rejected, not silently ignored"
         );
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("unexpected trailing argument"),
             "wrong error: {}",
@@ -2687,7 +2614,7 @@ mod tests {
             result.is_err(),
             "extra trailing argument to rule must be rejected, not silently ignored"
         );
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("unexpected trailing argument"),
             "wrong error: {}",
@@ -2762,7 +2689,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a ?v] (not)])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(msg.contains("requires at least one clause"));
     }
 
@@ -2771,7 +2698,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a ?v] (not (not [?x :banned true]))])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(msg.contains("cannot appear inside another"));
     }
 
@@ -2781,7 +2708,7 @@ mod tests {
         let input = r#"(query [:find ?x :where [?x :a ?v] (not [?y :banned true])])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(msg.contains("not bound"));
     }
 
@@ -2791,7 +2718,7 @@ mod tests {
         let input = r#"(rule [(eligible ?x) [?x :applied true] (not [?y :banned true])])"#;
         let result = parse_datalog_command(input);
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(msg.contains("not bound"));
     }
 
@@ -2870,7 +2797,7 @@ mod tests {
              (not-join [?role] [?e :has-role ?role])])",
         );
         assert!(result.is_err(), "unbound join var must be rejected");
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("?role") && msg.contains("not bound"),
             "error must name the offending variable"
@@ -3061,6 +2988,7 @@ mod tests {
         assert!(
             result
                 .unwrap_err()
+                .to_string()
                 .contains("requires at least one aggregate"),
             "wrong error message"
         );
@@ -3071,13 +2999,16 @@ mod tests {
         let result = parse_datalog_command(r#"(query [:find (count ?unbound) :where [?e :a ?v]])"#);
         assert!(result.is_err(), "unbound aggregate var should fail");
         assert!(
-            result.unwrap_err().contains("not bound in :where"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not bound in :where"),
             "wrong error message"
         );
     }
 
     // Helper used by parse_expr tests (Task 2 / Phase 7.2b)
-    fn parse(s: &str) -> Result<DatalogCommand, String> {
+    fn parse(s: &str) -> Result<DatalogCommand> {
         parse_datalog_command(s)
     }
 
@@ -3327,7 +3258,7 @@ mod tests {
     fn test_integer_overflow_returns_error() {
         let result = tokenize("99999999999999999999999999999");
         assert!(result.is_err(), "i64 overflow must return error, not panic");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().to_string();
         assert!(
             err.contains("out of range"),
             "error should mention out of range"
@@ -3425,7 +3356,7 @@ mod or_parse_tests {
             cmd.is_err(),
             "should fail: branches introduce different vars"
         );
-        let err = cmd.unwrap_err();
+        let err = cmd.unwrap_err().to_string();
         assert!(err.contains("same set of new variables"));
     }
 
@@ -3438,7 +3369,7 @@ mod or_parse_tests {
                                 [?unbound :tag :red])])"#,
         );
         assert!(cmd.is_err(), "should fail: unbound join var");
-        let err = cmd.unwrap_err();
+        let err = cmd.unwrap_err().to_string();
         assert!(err.contains("not bound"));
     }
 
@@ -3450,7 +3381,7 @@ mod or_parse_tests {
                               (not (or [?e :a true] [?e :b true]))])"#,
         );
         assert!(cmd.is_err(), "or inside not should be a parse error");
-        let err = cmd.unwrap_err();
+        let err = cmd.unwrap_err().to_string();
         assert!(err.contains("or") || err.contains("not"));
     }
 }
@@ -3522,7 +3453,7 @@ mod window_parse_tests {
             r#"(query [:find (lag ?v :over (:order-by ?v)) :where [?e :x ?v]])"#,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not supported"));
+        assert!(result.unwrap_err().to_string().contains("not supported"));
     }
 
     #[test]
@@ -3531,7 +3462,7 @@ mod window_parse_tests {
             r#"(query [:find (sum ?v :over (:partition-by ?p)) :where [?e :x ?v] [?e :y ?p]])"#,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("order-by"));
+        assert!(result.unwrap_err().to_string().contains("order-by"));
     }
 
     #[test]
@@ -3540,7 +3471,13 @@ mod window_parse_tests {
             r#"(query [:find (count-distinct ?v :over (:order-by ?v)) :where [?e :x ?v]])"#,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_lowercase().contains("window"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .to_lowercase()
+                .contains("window")
+        );
     }
 
     #[test]
@@ -3594,7 +3531,7 @@ mod window_parse_tests {
             r#"(query [:find (lead ?v :over (:order-by ?v)) :where [?e :x ?v]])"#,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not supported"));
+        assert!(result.unwrap_err().to_string().contains("not supported"));
     }
 
     #[test]

@@ -23,11 +23,14 @@ fn open_nonexistent_directory_returns_coded_error() {
 
 #[test]
 fn execute_parse_error_returns_coded_error() {
+    // Migrated by the PRS category PR (#358): parser.rs errors now carry
+    // their real PRS-0xx code instead of falling back to INT-000. This
+    // input never finds a closing `)`, so it's PRS-005 (Unclosed list).
     let db = Minigraf::in_memory().unwrap();
     let result = db.execute("(this is not valid datalog");
     let err = result.expect_err("malformed input should fail to parse");
-    assert_eq!(err.category(), ErrorCategory::Internal);
-    assert_eq!(err.code(), "INT-000");
+    assert_eq!(err.category(), ErrorCategory::Parser);
+    assert_eq!(err.code(), "PRS-005");
 }
 
 #[test]
