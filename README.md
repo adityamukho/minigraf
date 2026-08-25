@@ -215,6 +215,8 @@ Benchmarks on Intel Core i7-1065G7 @ 1.30GHz, 16 GB RAM, Rust 1.92.0. See [BENCH
 
 File-backed databases enforce a maximum fact size of **4 080 serialised bytes** per fact. In-memory databases have no limit.
 
+**Durability tuning:** every write is `fsync`'d immediately by default (`SyncMode::Full`). Bulk loaders/migrations that can safely re-run from a checkpoint watermark on failure can trade that for throughput with `OpenOptions::new().synchronous(SyncMode::Normal)` — `checkpoint()` still fsyncs unconditionally in both modes. See the [Performance Tuning wiki page](https://github.com/project-minigraf/minigraf/wiki/Performance-Tuning#configuration-knobs) for the full tradeoff and the write-batching pattern that pairs with it.
+
 ## Contributing
 
 This is a solo-maintained project with a long-term vision. Read [PHILOSOPHY.md](PHILOSOPHY.md) and [ROADMAP.md](ROADMAP.md) before proposing features.
