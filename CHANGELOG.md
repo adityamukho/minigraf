@@ -86,6 +86,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string-matches error output is affected, including the interactive REPL's
   printed error messages and all 7 language-binding repos (Python, Node,
   WASM, Java, Android, Swift, C).
+- **Query executor errors now carry real `QRY-00N` codes** (#361, part of
+  #277) instead of the generic `INT-000` fallback: `QRY-001` invalid entity,
+  `QRY-002` attribute must be a keyword, `QRY-003` cannot transact a
+  pseudo-attribute, `QRY-004` invalid value, `QRY-005` transaction failed,
+  `QRY-006` retraction failed, `QRY-007` unknown predicate, `QRY-008`
+  functions lock poisoned, `QRY-009` rules lock poisoned — the full QRY
+  category (9 of 9 documented codes; see `docs/ERROR_REFERENCE.md`). Anything
+  that was matching on `MinigrafError::code() == "INT-000"` for one of these
+  conditions now sees the specific code instead. `QRY-001`/`004`/`005`/`006`'s
+  `ERROR_REFERENCE.md` "Error text" entries were also rewritten from a
+  concrete example (e.g. `` `Invalid entity: "not-a-uuid"` ``) to the
+  canonical `{}`-placeholder template form (`` `Invalid entity: {}` ``) they
+  share with `REGISTRY`, per the design spec's migration convention; the
+  worked example moved to each entry's "Example" section, unchanged.
+  `QRY-001`..`006` (the transact/retract validation codes) are wired into
+  `DatalogExecutor::execute_transact`/`execute_retract`, but that code path
+  is not reachable through `Minigraf::execute()` today — the public write
+  path routes `transact`/`retract` through `Minigraf::materialize_transaction`/
+  `materialize_retraction` (`src/db.rs`) instead, which raise their own
+  uncoded (still `INT-000`) errors, two of which — "attribute must be a
+  keyword" and "cannot transact a pseudo-attribute" — are already earmarked
+  as `API-003`/`API-004` for the API+INT category PR (#277 step 6).
 
 ### Bug fixes
 

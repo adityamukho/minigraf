@@ -35,6 +35,15 @@ pub enum ErrorCategory {
 /// downstream `match`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCode {
+    Qry001,
+    Qry002,
+    Qry003,
+    Qry004,
+    Qry005,
+    Qry006,
+    Qry007,
+    Qry008,
+    Qry009,
     Int000,
 }
 
@@ -43,12 +52,68 @@ pub(crate) enum ErrorCode {
 /// The message template is verified against `docs/ERROR_REFERENCE.md`'s
 /// "Error text" lines by the sync test in this module (added once real
 /// codes exist in a follow-up category PR — see the design spec).
-pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[(
-    ErrorCode::Int000,
-    "INT-000",
-    "unclassified internal error: {}",
-    ErrorCategory::Internal,
-)];
+pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
+    (
+        ErrorCode::Qry001,
+        "QRY-001",
+        "Invalid entity: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry002,
+        "QRY-002",
+        "Attribute must be a keyword",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry003,
+        "QRY-003",
+        "Cannot transact a pseudo-attribute",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry004,
+        "QRY-004",
+        "Invalid value: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry005,
+        "QRY-005",
+        "Transaction failed: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry006,
+        "QRY-006",
+        "Retraction failed: {}",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry007,
+        "QRY-007",
+        "unknown predicate: '{}'",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry008,
+        "QRY-008",
+        "functions lock poisoned",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Qry009,
+        "QRY-009",
+        "rules lock poisoned",
+        ErrorCategory::Query,
+    ),
+    (
+        ErrorCode::Int000,
+        "INT-000",
+        "unclassified internal error: {}",
+        ErrorCategory::Internal,
+    ),
+];
 
 pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, ErrorCategory) {
     let entry = REGISTRY.iter().find(|(c, ..)| *c == code);
@@ -298,6 +363,15 @@ mod tests {
         }
 
         match ErrorCode::Int000 {
+            ErrorCode::Qry001 => assert_has_registry_entry(ErrorCode::Qry001),
+            ErrorCode::Qry002 => assert_has_registry_entry(ErrorCode::Qry002),
+            ErrorCode::Qry003 => assert_has_registry_entry(ErrorCode::Qry003),
+            ErrorCode::Qry004 => assert_has_registry_entry(ErrorCode::Qry004),
+            ErrorCode::Qry005 => assert_has_registry_entry(ErrorCode::Qry005),
+            ErrorCode::Qry006 => assert_has_registry_entry(ErrorCode::Qry006),
+            ErrorCode::Qry007 => assert_has_registry_entry(ErrorCode::Qry007),
+            ErrorCode::Qry008 => assert_has_registry_entry(ErrorCode::Qry008),
+            ErrorCode::Qry009 => assert_has_registry_entry(ErrorCode::Qry009),
             ErrorCode::Int000 => assert_has_registry_entry(ErrorCode::Int000),
         }
     }
