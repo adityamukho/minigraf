@@ -1328,7 +1328,7 @@ Expected: no warnings. Fix anything flagged (likely candidates: an unused `Resul
 - [ ] **Step 3: Full test suite**
 
 Run: `cargo test`
-Expected: PASS, same or greater test count than before this plan started (`cargo test 2>&1 | tail -5` — compare against the pre-change baseline of 1023 tests noted in `CLAUDE.md`; the 4 new tests in `error_codes_foundation_test.rs` plus 12 in `src/error.rs`'s own module bring the count up by 16).
+Expected: PASS, same or greater test count than before this plan started (`cargo test 2>&1 | tail -5` — compare against the pre-change baseline of 1023 tests noted in `CLAUDE.md`; the 8 new tests in `error_codes_foundation_test.rs` plus 12 in `src/error.rs`'s own module bring the count up by 20).
 
 - [ ] **Step 4: WASM target build check (best-effort)**
 
