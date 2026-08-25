@@ -33,7 +33,16 @@ pub enum ErrorCategory {
 /// it resolves to via [`REGISTRY`] is public (through [`MinigrafError::code`]).
 /// Kept internal so this enum is free to be reorganized without breaking any
 /// downstream `match`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deliberately does NOT derive `Debug`: this enum's variant count tracks
+/// every documented error code (130 once all six #277 category PRs land),
+/// and a derived `Debug` impl generates a per-variant string-literal match
+/// arm that's pure binary-size cost with no runtime use anywhere in this
+/// crate (nothing formats an `ErrorCode` with `{:?}` — [`CodedError`]'s own
+/// hand-written `Debug` below only needs the already-formatted `message`
+/// and the code string, not this enum). Keeps the project's <1MB binary
+/// size goal (see PHILOSOPHY.md) affordable as the registry grows.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCode {
     Int000,
     Stg001,
@@ -340,13 +349,23 @@ pub(crate) fn format_template(template: &str, args: &[&dyn fmt::Display]) -> Str
 /// plumbing (`?`, `.context()`) unchanged. Recovered at the public API
 /// boundary by [`MinigrafError::from`]`(anyhow::Error)` walking the error
 /// chain for the first `CodedError` via `downcast_ref`.
-#[derive(Debug)]
 pub(crate) struct CodedError {
     code: ErrorCode,
     message: String,
 }
 
 impl CodedError {
+    /// `#[cold]`/`#[inline(never)]`: `bail_coded!`/`err_coded!` expand to a
+    /// call to this at every one of the (currently ~50, eventually ~250+
+    /// once all six #277 category PRs land) error call sites across the
+    /// crate. Error construction is by definition the cold path, so forcing
+    /// it out of line keeps the lookup + `format_template` call from being
+    /// duplicated inline at each one — pure binary-size cost for a path
+    /// that, unlike the argument-array construction immediately at the call
+    /// site (which still inlines, and is cheap), has no per-call-site
+    /// specialization to gain from inlining.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn new(code: ErrorCode, args: &[&dyn fmt::Display]) -> Self {
         let (_, template, _) = registry_entry(code);
         CodedError {
@@ -363,6 +382,21 @@ impl CodedError {
 impl fmt::Display for CodedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
+    }
+}
+
+// Hand-written rather than `#[derive(Debug)]`: a derive would require
+// `ErrorCode: Debug`, which is deliberately not implemented (see the
+// binary-size comment on `ErrorCode`). `std::error::Error` only requires
+// `Debug` to exist, not that it echo every field, so this reuses the
+// already-formatted `message` plus the stable code string instead.
+impl fmt::Debug for CodedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (code_str, ..) = registry_entry(self.code);
+        f.debug_struct("CodedError")
+            .field("code", &code_str)
+            .field("message", &self.message)
+            .finish()
     }
 }
 
@@ -627,7 +661,10 @@ mod tests {
         let coded = err
             .downcast_ref::<CodedError>()
             .expect("expected a CodedError");
-        assert_eq!(coded.code(), ErrorCode::Int000);
+        assert!(
+            coded.code() == ErrorCode::Int000,
+            "expected ErrorCode::Int000"
+        );
         assert_eq!(coded.to_string(), "unclassified internal error: boom");
     }
 
@@ -637,7 +674,10 @@ mod tests {
         let coded = err
             .downcast_ref::<CodedError>()
             .expect("expected a CodedError");
-        assert_eq!(coded.code(), ErrorCode::Int000);
+        assert!(
+            coded.code() == ErrorCode::Int000,
+            "expected ErrorCode::Int000"
+        );
     }
 
     #[test]
