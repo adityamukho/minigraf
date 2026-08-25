@@ -114,6 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multiple-owners precondition) were deliberately left uncoded (`INT-000`)
   rather than assigned an undocumented code — left for the final API+INT
   audit PR.
+- **`src/wal.rs`'s errors now carry real `WAL-0xx` codes instead of falling
+  back to `INT-000`** (#360, toward #277): a bad `.wal` magic number is
+  `WAL-001`, an unsupported WAL version is `WAL-002`, a fact whose serialised
+  size exceeds the WAL's per-entry limit (~4080 bytes) is `WAL-003`, a fact
+  whose serialised size exceeds `u32::MAX` is `WAL-004` (practically
+  unreachable — WAL-003's limit fires first), a WAL header's `num_facts`
+  exceeding the platform `usize` is `WAL-005` (unreachable on any 64-bit
+  target), and a failure to delete the sidecar `.wal` file after a successful
+  checkpoint is `WAL-006`. `docs/ERROR_REFERENCE.md`'s WAL-002/003/004/006
+  "Error text" entries were rewritten from a concrete example value to the
+  canonical `{}`-placeholder template form so the registry↔doc sync test can
+  compare them byte-for-byte; the concrete example now lives in each entry's
+  prose instead.
 
 ### Bug fixes
 

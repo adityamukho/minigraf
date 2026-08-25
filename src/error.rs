@@ -63,6 +63,12 @@ pub(crate) enum ErrorCode {
     Stg025,
     Stg026,
     Stg027,
+    Wal001,
+    Wal002,
+    Wal003,
+    Wal004,
+    Wal005,
+    Wal006,
 }
 
 /// Single source of truth: (code, code string, message template, category).
@@ -238,6 +244,42 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
         "STG-027",
         "Failed to lock database at {}: {}. This filesystem does not support file locking (common on NFSv3 without lockd, and on some FUSE mounts). Set `allow_unlocked` in `OpenOptions` to open anyway — that accepts the risk that concurrent writers corrupt the file.",
         ErrorCategory::Storage,
+    ),
+    (
+        ErrorCode::Wal001,
+        "WAL-001",
+        "Invalid WAL magic number: not a .wal file",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal002,
+        "WAL-002",
+        "Unsupported WAL version: {} (expected {})",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal003,
+        "WAL-003",
+        "Fact serialised size {} bytes exceeds maximum {} bytes. Store large payloads externally and reference them with a Value::String URL/path or Value::Ref entity ID.",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal004,
+        "WAL-004",
+        "fact serialised size {} exceeds u32 range",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal005,
+        "WAL-005",
+        "WAL num_facts exceeds platform usize",
+        ErrorCategory::Wal,
+    ),
+    (
+        ErrorCode::Wal006,
+        "WAL-006",
+        "failed to delete WAL file {}: {}",
+        ErrorCategory::Wal,
     ),
 ];
 
@@ -512,7 +554,13 @@ mod tests {
                 | ErrorCode::Stg024
                 | ErrorCode::Stg025
                 | ErrorCode::Stg026
-                | ErrorCode::Stg027 => assert_has_registry_entry(code),
+                | ErrorCode::Stg027
+                | ErrorCode::Wal001
+                | ErrorCode::Wal002
+                | ErrorCode::Wal003
+                | ErrorCode::Wal004
+                | ErrorCode::Wal005
+                | ErrorCode::Wal006 => assert_has_registry_entry(code),
             }
         }
 
@@ -545,6 +593,12 @@ mod tests {
             ErrorCode::Stg025,
             ErrorCode::Stg026,
             ErrorCode::Stg027,
+            ErrorCode::Wal001,
+            ErrorCode::Wal002,
+            ErrorCode::Wal003,
+            ErrorCode::Wal004,
+            ErrorCode::Wal005,
+            ErrorCode::Wal006,
         ] {
             exhaustive(code);
         }
