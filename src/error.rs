@@ -46,17 +46,30 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[(
 )];
 
 pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, ErrorCategory) {
-    REGISTRY
-        .iter()
-        .find(|(c, ..)| *c == code)
-        .map(|(_, code_str, template, category)| (*code_str, *template, *category))
-        .expect("every ErrorCode variant must have a REGISTRY entry")
+    let entry = REGISTRY.iter().find(|(c, ..)| *c == code);
+    // Unreachable in practice: every `ErrorCode` variant is added together with its
+    // `REGISTRY` entry (and `registry_is_a_subset_of_error_reference_doc` exercises
+    // every variant). Falls back to the always-present INT-000 entry rather than
+    // panicking, since `unwrap`/`expect`/`panic!` are denied crate-wide.
+    debug_assert!(
+        entry.is_some(),
+        "every ErrorCode variant must have a REGISTRY entry"
+    );
+    match entry {
+        Some((_, code_str, template, category)) => (*code_str, *template, *category),
+        None => (
+            "INT-000",
+            "unclassified internal error: {}",
+            ErrorCategory::Internal,
+        ),
+    }
 }
 
 /// Fill a message template's positional `{}` placeholders from `args`, in order.
 ///
 /// Not `std::fmt`-based: the template is runtime data pulled from [`REGISTRY`],
 /// and `format!` requires a compile-time string literal.
+#[allow(dead_code)] // unused until the PRS category PR wires up real call sites
 pub(crate) fn format_template(template: &str, args: &[&dyn fmt::Display]) -> String {
     let placeholder_count = template.matches("{}").count();
     debug_assert_eq!(
@@ -92,6 +105,7 @@ pub(crate) struct CodedError {
 }
 
 impl CodedError {
+    #[allow(dead_code)] // unused until the PRS category PR wires up real call sites
     pub(crate) fn new(code: ErrorCode, args: &[&dyn fmt::Display]) -> Self {
         let (_, template, _) = registry_entry(code);
         CodedError {
@@ -118,6 +132,7 @@ impl std::error::Error for CodedError {}
 /// `bail_coded!(ErrorCode::Prs001)` for a static message, or
 /// `bail_coded!(ErrorCode::Prs002, ch)` to fill the template's `{}`
 /// placeholders positionally. A drop-in replacement for `anyhow::bail!`.
+#[allow(unused_macros)] // unused until the PRS category PR wires up real call sites
 macro_rules! bail_coded {
     ($code:expr $(,)?) => {
         return Err(::anyhow::Error::new($crate::error::CodedError::new($code, &[])))
@@ -134,6 +149,7 @@ macro_rules! bail_coded {
 ///
 /// For use where an `anyhow::Error` value is needed directly, e.g.
 /// `.ok_or_else(|| err_coded!(ErrorCode::Api009))`.
+#[allow(unused_macros)] // unused until the PRS category PR wires up real call sites
 macro_rules! err_coded {
     ($code:expr $(,)?) => {
         ::anyhow::Error::new($crate::error::CodedError::new($code, &[]))
@@ -146,7 +162,9 @@ macro_rules! err_coded {
     };
 }
 
+#[allow(unused_imports)] // unused until the PRS category PR wires up real call sites
 pub(crate) use bail_coded;
+#[allow(unused_imports)] // unused until the PRS category PR wires up real call sites
 pub(crate) use err_coded;
 
 /// The error type returned from Minigraf's public API.
