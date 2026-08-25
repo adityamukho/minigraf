@@ -82,9 +82,18 @@ pub enum SyncMode {
     /// No per-write flush. The WAL entry is still `write_all()`'d — safe
     /// across an ordinary process crash — but not forced to disk until the
     /// next checkpoint (auto-threshold, explicit `checkpoint()`, or clean
-    /// close). Data written since the last checkpoint is lost only on OS
-    /// crash or power loss, not process death. Intended for bulk loaders
-    /// that can safely re-run from a checkpoint watermark on failure.
+    /// close), which fsyncs the main file directly rather than the WAL —
+    /// the WAL is simply deleted once the main file holds the same data.
+    /// Data written since the last checkpoint is lost only on OS crash or
+    /// power loss, not process death. Intended for bulk loaders that can
+    /// safely re-run from a checkpoint watermark on failure.
+    ///
+    /// Combined with [`OpenOptions::wal_checkpoint_threshold`] set to
+    /// `usize::MAX`, nothing is ever forced to disk for the handle's
+    /// lifetime — no per-write flush, no auto-checkpoint, and no
+    /// close-time checkpoint (the same sentinel also suppresses that).
+    /// Callers wanting a bounded durability window should keep an explicit
+    /// `checkpoint()` call or a finite threshold.
     Normal,
 }
 
@@ -120,6 +129,13 @@ pub struct OpenOptions {
     /// Opening a database twice is refused regardless of this setting.
     pub allow_unlocked: bool,
     /// Controls WAL write durability. See [`SyncMode`]. Defaults to `SyncMode::Full`.
+    ///
+    /// The other durability/throughput lever is batching: `begin_write()` +
+    /// several `execute()` calls + one `commit()` collapses every staged
+    /// fact into a single WAL write and a single fsync, regardless of this
+    /// setting.
+    ///
+    /// No effect on in-memory databases, which have no WAL.
     pub synchronous: SyncMode,
 }
 
@@ -1674,6 +1690,79 @@ mod tests {
             2,
             "both facts should survive checkpoint + reopen under Normal sync mode"
         );
+    }
+
+    // ── file-backed: sync mode is plumbed through to both WalWriter call sites ──
+
+    #[test]
+    fn test_normal_sync_mode_reaches_both_wal_writer_call_sites() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.graph");
+
+        {
+            // Lazy-reopen call site (wal_write_stamped_batch): opened here because
+            // no .wal file exists yet, so open_with_options leaves `wal: None` and
+            // the first write creates it lazily.
+            let opts = OpenOptions {
+                synchronous: SyncMode::Normal,
+                wal_checkpoint_threshold: usize::MAX,
+                ..OpenOptions::default()
+            };
+            let db = opts.path(&path).open().unwrap();
+            db.execute(r#"(transact [[:alice :name "Alice"]])"#)
+                .unwrap();
+
+            let ctx = db.inner.write_lock.lock().unwrap();
+            match &*ctx {
+                WriteContext::File { wal, .. } => {
+                    let wal_writer = wal.as_ref().expect("WAL should be open after a write");
+                    assert_eq!(
+                        wal_writer.sync_mode(),
+                        SyncMode::Normal,
+                        "lazy-reopen call site should honor opts.synchronous"
+                    );
+                }
+                WriteContext::Memory => panic!("expected file-backed WriteContext"),
+            }
+            drop(ctx);
+            // Handle drops here without checkpointing: wal_checkpoint_threshold ==
+            // usize::MAX suppresses both auto-checkpoint and the close-time
+            // checkpoint in `Inner::drop`, so the .wal file survives on disk.
+        }
+
+        let wal_path = {
+            let mut p = path.as_os_str().to_owned();
+            p.push(".wal");
+            std::path::PathBuf::from(p)
+        };
+        assert!(
+            wal_path.exists(),
+            "WAL file must survive the drop of a Normal-sync, MAX-threshold handle"
+        );
+
+        // Initial-open call site (open_with_options): the .wal file already
+        // exists on disk from the previous block, so this reopen constructs the
+        // WalWriter eagerly instead of lazily on first write.
+        let db = OpenOptions::new()
+            .synchronous(SyncMode::Normal)
+            .path(&path)
+            .open()
+            .unwrap();
+
+        let ctx = db.inner.write_lock.lock().unwrap();
+        match &*ctx {
+            WriteContext::File { wal, .. } => {
+                let wal_writer = wal
+                    .as_ref()
+                    .expect("WAL should be opened eagerly since the .wal file pre-existed");
+                assert_eq!(
+                    wal_writer.sync_mode(),
+                    SyncMode::Normal,
+                    "initial-open call site should honor opts.synchronous"
+                );
+            }
+            WriteContext::Memory => panic!("expected file-backed WriteContext"),
+        }
     }
 
     // ── failed commit leaves database unchanged ───────────────────────────────

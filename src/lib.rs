@@ -89,8 +89,6 @@ pub mod browser;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use db::OpenOptionsWithPath;
-/// Re-exported at the crate root alongside [`OpenOptions`] so
-/// `minigraf::SyncMode` is reachable without importing `minigraf::db`.
 pub use db::{Minigraf, OpenOptions, SyncMode, WriteTransaction};
 pub use repl::Repl;
 

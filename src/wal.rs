@@ -181,6 +181,13 @@ impl WalWriter {
         Ok(WalWriter { file, sync_mode })
     }
 
+    /// The `SyncMode` this writer was opened with. Used only in tests, to
+    /// verify that `SyncMode` reaches `WalWriter` from every call site.
+    #[cfg(test)]
+    pub(crate) fn sync_mode(&self) -> SyncMode {
+        self.sync_mode
+    }
+
     /// Serialize `facts` as a WAL entry and append it to the file.
     ///
     /// The entry is written atomically from the caller's perspective:
