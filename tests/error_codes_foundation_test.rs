@@ -20,3 +20,19 @@ fn open_nonexistent_directory_returns_coded_error() {
     assert_eq!(err.category(), ErrorCategory::Internal);
     assert_eq!(err.code(), "INT-000");
 }
+
+#[test]
+fn execute_parse_error_returns_coded_error() {
+    let db = Minigraf::in_memory().unwrap();
+    let result = db.execute("(this is not valid datalog");
+    let err = result.expect_err("malformed input should fail to parse");
+    assert_eq!(err.category(), ErrorCategory::Internal);
+    assert_eq!(err.code(), "INT-000");
+}
+
+#[test]
+fn execute_valid_transact_returns_ok() {
+    let db = Minigraf::in_memory().unwrap();
+    let result = db.execute(r#"(transact [[#uuid "550e8400-e29b-41d4-a716-446655440000" :name "alice"]])"#);
+    assert!(result.is_ok(), "valid transact should succeed");
+}

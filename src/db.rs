@@ -525,7 +525,11 @@ impl Minigraf {
     /// - Parsing fails.
     /// - Execution fails.
     /// - WAL write fails (file-backed databases).
-    pub fn execute(&self, input: &str) -> Result<QueryResult> {
+    pub fn execute(&self, input: &str) -> Result<QueryResult, MinigrafError> {
+        self.execute_inner(input).map_err(MinigrafError::from)
+    }
+
+    fn execute_inner(&self, input: &str) -> Result<QueryResult> {
         // Detect same-thread reentrant write (would deadlock on the Mutex).
         if is_write_tx_active() {
             bail!(
