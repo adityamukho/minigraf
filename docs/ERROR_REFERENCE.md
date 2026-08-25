@@ -1,7 +1,7 @@
 # Minigraf Error Reference
 
 This document covers every user-facing error produced by the core Minigraf Rust library.
-Errors surface as `anyhow::Error` values returned from `db.execute()`, `db.prepare()`,
+Errors surface as `MinigrafError` values returned from `db.execute()`, `db.prepare()`,
 and related API methods.
 
 **Reference codes** (e.g. `PRS-001`) appear in runtime error output as
