@@ -52,10 +52,15 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[(
 
 pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, ErrorCategory) {
     let entry = REGISTRY.iter().find(|(c, ..)| *c == code);
-    // Unreachable in practice: every `ErrorCode` variant is added together with its
-    // `REGISTRY` entry (and `registry_is_a_subset_of_error_reference_doc` exercises
-    // every variant). Falls back to the always-present INT-000 entry rather than
-    // panicking, since `unwrap`/`expect`/`panic!` are denied crate-wide.
+    // This is NOT exhaustively guaranteed: `registry_is_a_subset_of_error_reference_doc`
+    // iterates over `REGISTRY`, not over `ErrorCode` variants, so it cannot catch a new
+    // `ErrorCode` variant added without a matching `REGISTRY` row. The `debug_assert!`
+    // below catches that mistake in debug/test builds only — nothing catches it in a
+    // release build, where it silently falls back to the always-present INT-000 entry
+    // below instead of panicking, since `unwrap`/`expect`/`panic!` are denied crate-wide.
+    // `error::tests::every_error_code_variant_has_a_registry_entry` is the real
+    // exhaustiveness guarantee: its `match` over `ErrorCode` fails to compile if a new
+    // variant is added without also being handled there.
     debug_assert!(
         entry.is_some(),
         "every ErrorCode variant must have a REGISTRY entry"
@@ -266,6 +271,35 @@ mod tests {
             ),
             "x then 7"
         );
+    }
+
+    /// Exhaustively verifies every `ErrorCode` variant resolves to a real
+    /// `REGISTRY` entry, not `registry_entry`'s INT-000 fallback. The `match`
+    /// below must list every `ErrorCode` variant explicitly (no `_` arm) so
+    /// that adding a new variant without also handling it here is a compile
+    /// error — the real exhaustiveness guarantee `registry_entry`'s
+    /// `debug_assert!` cannot provide on its own (it's compiled out in
+    /// release builds, and `registry_is_a_subset_of_error_reference_doc`
+    /// only walks `REGISTRY`, not `ErrorCode`). Necessarily small today
+    /// since `ErrorCode` has just one variant, but the structure is what
+    /// matters for the PRS category PR that adds ~79 more.
+    #[test]
+    fn every_error_code_variant_has_a_registry_entry() {
+        fn assert_has_registry_entry(code: ErrorCode) {
+            let (code_str, _, _) = registry_entry(code);
+            assert_ne!(
+                code_str, "",
+                "ErrorCode variant resolved to an empty registry code"
+            );
+            assert!(
+                REGISTRY.iter().any(|(c, ..)| *c == code),
+                "ErrorCode variant has no REGISTRY entry"
+            );
+        }
+
+        match ErrorCode::Int000 {
+            ErrorCode::Int000 => assert_has_registry_entry(ErrorCode::Int000),
+        }
     }
 
     #[test]
