@@ -67,6 +67,27 @@ fn memory_page_cache_capacity(_opts: &OpenOptions) -> usize {
     0
 }
 
+// ─── SyncMode ────────────────────────────────────────────────────────────────
+
+/// Controls how aggressively WAL writes are flushed to disk.
+///
+/// Independent of [`Minigraf::checkpoint`], which always fsyncs the main
+/// `.graph` file regardless of this setting — see [`OpenOptions::synchronous`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// `fdatasync` after every WAL write. Default; matches Minigraf's
+    /// behavior before this option existed — every committed `transact`/
+    /// `retract` is durable immediately.
+    Full,
+    /// No per-write flush. The WAL entry is still `write_all()`'d — safe
+    /// across an ordinary process crash — but not forced to disk until the
+    /// next checkpoint (auto-threshold, explicit `checkpoint()`, or clean
+    /// close). Data written since the last checkpoint is lost only on OS
+    /// crash or power loss, not process death. Intended for bulk loaders
+    /// that can safely re-run from a checkpoint watermark on failure.
+    Normal,
+}
+
 // ─── OpenOptions ─────────────────────────────────────────────────────────────
 
 /// Configuration options for opening a `Minigraf` database.
@@ -98,6 +119,8 @@ pub struct OpenOptions {
     /// This does **not** override a lock that another handle actually holds.
     /// Opening a database twice is refused regardless of this setting.
     pub allow_unlocked: bool,
+    /// Controls WAL write durability. See [`SyncMode`]. Defaults to `SyncMode::Full`.
+    pub synchronous: SyncMode,
 }
 
 impl Default for OpenOptions {
@@ -108,6 +131,7 @@ impl Default for OpenOptions {
             max_derived_facts: DEFAULT_MAX_DERIVED_FACTS,
             max_results: DEFAULT_MAX_RESULTS,
             allow_unlocked: false,
+            synchronous: SyncMode::Full,
         }
     }
 }
@@ -152,6 +176,13 @@ impl OpenOptions {
     #[must_use]
     pub fn allow_unlocked(mut self, allow: bool) -> Self {
         self.allow_unlocked = allow;
+        self
+    }
+
+    /// Set the WAL durability mode. See [`SyncMode`].
+    #[must_use]
+    pub fn synchronous(mut self, mode: SyncMode) -> Self {
+        self.synchronous = mode;
         self
     }
 
@@ -1592,9 +1623,21 @@ mod tests {
             max_derived_facts: 100_000,
             max_results: 1_000_000,
             allow_unlocked: false,
+            synchronous: SyncMode::Full,
         };
         let db = Minigraf::open_with_options(&path, opts).unwrap();
         assert_eq!(db.inner.options.wal_checkpoint_threshold, 5);
+    }
+
+    #[test]
+    fn test_sync_mode_defaults_to_full() {
+        assert_eq!(OpenOptions::default().synchronous, SyncMode::Full, "default sync mode");
+    }
+
+    #[test]
+    fn test_sync_mode_builder_sets_normal() {
+        let opts = OpenOptions::new().synchronous(SyncMode::Normal);
+        assert_eq!(opts.synchronous, SyncMode::Normal, "builder should set Normal");
     }
 
     // ── failed commit leaves database unchanged ───────────────────────────────
