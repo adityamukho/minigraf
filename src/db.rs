@@ -15,6 +15,7 @@ use crate::graph::types::{Fact, TxId, VALID_TIME_FOREVER};
 /// in any practical context, avoiding the collision that `0` would have with the Unix
 /// epoch (1970-01-01T00:00:00Z), which is a legitimate `valid_from` value.
 pub(crate) const VALID_FROM_USE_TX_TIME: i64 = i64::MIN;
+use crate::error::MinigrafError;
 use crate::graph::FactStorage;
 use crate::graph::types::Value;
 use crate::query::datalog::evaluator::DEFAULT_MAX_DERIVED_FACTS;
@@ -218,7 +219,7 @@ impl OpenOptions {
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
-    pub fn open_memory(self) -> Result<Minigraf> {
+    pub fn open_memory(self) -> Result<Minigraf, MinigrafError> {
         Minigraf::in_memory_with_options(self)
     }
 }
@@ -238,7 +239,7 @@ impl OpenOptionsWithPath {
     ///
     /// Returns an error if the file cannot be opened, the header is corrupt,
     /// or WAL replay fails.
-    pub fn open(self) -> Result<Minigraf> {
+    pub fn open(self) -> Result<Minigraf, MinigrafError> {
         Minigraf::open_with_options(self.path, self.opts)
     }
 }
@@ -359,7 +360,7 @@ impl Minigraf {
     /// Returns an error if the file cannot be opened, the header is corrupt,
     /// or WAL replay fails.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, MinigrafError> {
         Self::open_with_options(path, OpenOptions::default())
     }
 
@@ -370,7 +371,15 @@ impl Minigraf {
     /// Returns an error if the file cannot be opened, the header is corrupt,
     /// or WAL replay fails.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_with_options(path: impl AsRef<Path>, opts: OpenOptions) -> Result<Self> {
+    pub fn open_with_options(
+        path: impl AsRef<Path>,
+        opts: OpenOptions,
+    ) -> Result<Self, MinigrafError> {
+        Self::open_with_options_inner(path, opts).map_err(MinigrafError::from)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_with_options_inner(path: impl AsRef<Path>, opts: OpenOptions) -> Result<Self> {
         let db_path = path.as_ref().to_path_buf();
 
         // Open the main .graph file
@@ -417,7 +426,7 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
-    pub fn in_memory() -> Result<Self> {
+    pub fn in_memory() -> Result<Self, MinigrafError> {
         Self::in_memory_with_options(OpenOptions::default())
     }
 
@@ -429,7 +438,11 @@ impl Minigraf {
     /// # Errors
     ///
     /// Returns an error if the in-memory storage backend fails to initialise.
-    pub fn in_memory_with_options(opts: OpenOptions) -> Result<Self> {
+    pub fn in_memory_with_options(opts: OpenOptions) -> Result<Self, MinigrafError> {
+        Self::in_memory_with_options_inner(opts).map_err(MinigrafError::from)
+    }
+
+    fn in_memory_with_options_inner(opts: OpenOptions) -> Result<Self> {
         let backend = MemoryBackend::new();
         let pfs = PersistentFactStorage::new(backend, memory_page_cache_capacity(&opts))?;
         let fact_storage = pfs.storage().clone();
