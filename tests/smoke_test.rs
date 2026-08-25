@@ -123,11 +123,8 @@ fn smoke_large_graph_10_cycles() {
 
         // Invariant 5: temporal query (:as-of 1) returns data from tx 1.
         let n_temporal = count_results(
-            db.execute("(query [:find ?e :where [?e :version 1]] :as-of 1)")
-                .unwrap_or(QueryResult::QueryResults {
-                    vars: vec![],
-                    results: vec![],
-                }),
+            db.execute("(query [:find ?e :as-of 1 :where [?e :version 1]])")
+                .unwrap(),
         );
         // Should return some results — exact count depends on tx ordering.
         // Just verify it doesn't error and returns > 0 for tx 1.
