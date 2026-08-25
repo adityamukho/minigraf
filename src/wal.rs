@@ -20,9 +20,10 @@
 //! ```
 
 use crate::db::SyncMode;
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::types::Fact;
 use crate::storage::packed_pages::MAX_FACT_BYTES;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -50,15 +51,11 @@ fn validate_wal_header(file: &mut File) -> Result<()> {
     file.read_exact(&mut buf)?;
 
     if buf[0..4] != WAL_MAGIC {
-        bail!("Invalid WAL magic number: not a .wal file");
+        bail_coded!(ErrorCode::Wal001);
     }
     let version = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
     if version != WAL_VERSION {
-        bail!(
-            "Unsupported WAL version: {} (expected {})",
-            version,
-            WAL_VERSION
-        );
+        bail_coded!(ErrorCode::Wal002, version, WAL_VERSION);
     }
     Ok(())
 }
@@ -100,20 +97,10 @@ fn serialize_entry(tx_count: u64, facts: &[Fact]) -> Result<Vec<u8>> {
     for fact in facts {
         let fact_bytes = postcard::to_allocvec(fact)?;
         if fact_bytes.len() > MAX_FACT_BYTES {
-            bail!(
-                "Fact serialised size {} bytes exceeds maximum {} bytes. \
-                 Store large payloads externally and reference them with a \
-                 Value::String URL/path or Value::Ref entity ID.",
-                fact_bytes.len(),
-                MAX_FACT_BYTES
-            );
+            bail_coded!(ErrorCode::Wal003, fact_bytes.len(), MAX_FACT_BYTES);
         }
-        let fact_len = u32::try_from(fact_bytes.len()).map_err(|_| {
-            anyhow::anyhow!(
-                "fact serialised size {} exceeds u32 range",
-                fact_bytes.len()
-            )
-        })?;
+        let fact_len = u32::try_from(fact_bytes.len())
+            .map_err(|_| err_coded!(ErrorCode::Wal004, fact_bytes.len()))?;
         payload.extend_from_slice(&fact_len.to_le_bytes());
         payload.extend_from_slice(&fact_bytes);
     }
@@ -222,8 +209,8 @@ impl WalWriter {
                 }
             }
         }
-        Err(anyhow::anyhow!(
-            "failed to delete WAL file {}: {}",
+        Err(err_coded!(
+            ErrorCode::Wal006,
             path.display(),
             last_err
                 .map(|e| e.to_string())
@@ -288,7 +275,7 @@ impl WalReader {
                 break; // truncated
             }
             let num_facts = usize::try_from(u64::from_le_bytes(num_facts_buf))
-                .map_err(|_| anyhow::anyhow!("WAL num_facts exceeds platform usize"))?;
+                .map_err(|_| err_coded!(ErrorCode::Wal005))?;
 
             // Sanity cap: no legitimate entry has more than 1M facts
             const MAX_FACTS_PER_ENTRY: usize = 1_000_000;
@@ -670,5 +657,87 @@ mod tests {
             result.is_err() || result.unwrap().is_empty(),
             "Should fail or return empty on corrupted large fact"
         );
+    }
+
+    // ── #360: WAL-0xx error code regression tests ──────────────────────────
+    //
+    // These assert the exact code carried by `MinigrafError::from(err)` for
+    // each migrated call site, complementing `tests/error_codes_wal_test.rs`
+    // (which exercises the same WAL-001/002/003 paths through the public
+    // `Minigraf` API). WAL-004 and WAL-005 are documented as "practically
+    // unreachable" (WAL-004 needs a ~4 GB single fact; WAL-005 can never
+    // fail on a 64-bit target, where `usize` and `u64` are the same width)
+    // and have no dedicated trigger test here for that reason — they are
+    // still covered by `error::tests::registry_is_a_subset_of_error_reference_doc`
+    // and `error::tests::every_error_code_variant_has_a_registry_entry`.
+
+    #[test]
+    fn test_wal_bad_magic_error_code_is_wal_001() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.wal");
+        std::fs::write(&path, b"XXXX\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00").unwrap();
+
+        let result = WalReader::open(&path);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("bad magic should be rejected"),
+        };
+        let minigraf_err: crate::error::MinigrafError = err.into();
+        assert_eq!(minigraf_err.code(), "WAL-001");
+    }
+
+    #[test]
+    fn test_wal_bad_version_error_code_is_wal_002() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("badversion.wal");
+
+        let mut header = [0u8; WAL_HEADER_SIZE];
+        header[0..4].copy_from_slice(&WAL_MAGIC);
+        header[4..8].copy_from_slice(&99u32.to_le_bytes());
+        std::fs::write(&path, header).unwrap();
+
+        let result = WalReader::open(&path);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("bad version should be rejected"),
+        };
+        let minigraf_err: crate::error::MinigrafError = err.into();
+        assert_eq!(minigraf_err.code(), "WAL-002");
+    }
+
+    #[test]
+    fn test_wal_fact_size_limit_error_code_is_wal_003() {
+        use crate::graph::types::{Fact, Value};
+        use uuid::Uuid;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oversized.wal");
+        let mut writer = WalWriter::open_or_create(&path, SyncMode::Full).unwrap();
+
+        let entity = Uuid::new_v4();
+        let huge_string = "a".repeat(MAX_FACT_BYTES + 1000);
+        let fact = Fact::new(entity, ":test".to_string(), Value::String(huge_string), 1);
+
+        let result = writer.append_entry(1, &[fact]);
+        let err = result.expect_err("oversized fact should be rejected");
+        let minigraf_err: crate::error::MinigrafError = err.into();
+        assert_eq!(minigraf_err.code(), "WAL-003");
+    }
+
+    #[test]
+    fn test_wal_delete_directory_error_code_is_wal_006() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory at the WAL path, rather than a file, makes
+        // `std::fs::remove_file` fail regardless of permissions -- portable
+        // across platforms without needing a permission-denial trick.
+        let path = dir.path().join("not-a-file.wal");
+        std::fs::create_dir(&path).unwrap();
+
+        let result = WalWriter::delete_file(&path);
+        let err = result.expect_err("deleting a directory should fail");
+        let minigraf_err: crate::error::MinigrafError = err.into();
+        assert_eq!(minigraf_err.code(), "WAL-006");
+
+        std::fs::remove_dir(&path).unwrap();
     }
 }
