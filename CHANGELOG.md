@@ -121,6 +121,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uncoded (still `INT-000`) errors, two of which — "attribute must be a
   keyword" and "cannot transact a pseudo-attribute" — are already earmarked
   as `API-003`/`API-004` for the API+INT category PR (#277 step 6).
+- **The core binary size budget is raised from 1MB to ~1.2MB** (`binary-size.yml`'s
+  `SIZE_LIMIT_BYTES`, and PHILOSOPHY.md §4's stated target), toward #277.
+  The project was already at the 1MB wire before #277 started (measured
+  ~1034 KiB pre-rollout on a controlled local build); #360 (WAL, 6 codes) and
+  #361 (QRY, 9 codes) together added only ~9 KiB, and even that was enough to
+  fail CI. All existing size levers — `opt-level = "z"`, `lto = true`,
+  `codegen-units = 1`, `strip = "symbols"`, and the non-generic
+  `bail_coded!`/`err_coded!`/`format_template` design (no per-call-site
+  monomorphization, unlike the generic `build_btree` fixed for the same
+  reason in v0.x) — were already in place; `cargo bloat` shows no single
+  dominant symbol to cut, just diffuse growth across ~2000 small functions.
+  Extrapolating to the full 130-code rollout (PRS: 79, STG: 27, WAL: 6,
+  QRY: 9, API+INT: 9) puts the total growth at roughly 60-70 KiB over the
+  pre-#277 baseline, which no further micro-optimization of already-maxed
+  settings can absorb. ~1.2MB keeps meaningful headroom above that projection
+  without abandoning the philosophy's small-binary principle.
 
 ### Bug fixes
 
