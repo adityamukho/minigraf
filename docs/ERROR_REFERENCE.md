@@ -1478,7 +1478,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-001 Invalid entity
 
-**Error text**: `Invalid entity: "not-a-uuid"`
+**Error text**: `Invalid entity: {}`
 
 **Cause**: An entity ID in a `transact` fact could not be resolved. Entity IDs must be UUIDs (as `#uuid "..."` tagged literals), existing entity symbols, or values that can be resolved to a UUID at execution time.
 
@@ -1525,7 +1525,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-004 Invalid value
 
-**Error text**: `Invalid value: [1, 2, 3]`
+**Error text**: `Invalid value: {}`
 
 **Cause**: A value in a fact is of a type that Minigraf cannot store. Supported value types are: string, integer (i64), float (f64), boolean, UUID ref (`Value::Ref`), and keyword.
 
@@ -1541,7 +1541,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-005 Transaction failed
 
-**Error text**: `Transaction failed: write lock is poisoned`
+**Error text**: `Transaction failed: {}`
 
 **Cause**: The batch of facts could not be committed. This is a wrapper error — the nested reason message identifies the root cause, which is typically a storage error, lock poisoning, or WAL write failure.
 
@@ -1554,7 +1554,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-006 Retraction failed
 
-**Error text**: `Retraction failed: fact not found`
+**Error text**: `Retraction failed: {}`
 
 **Cause**: A retraction could not be applied. The nested reason message identifies the specific cause — the fact may not exist at the given transaction time, or a storage error occurred.
 
@@ -1567,7 +1567,7 @@ predicate evaluation, or fact transacting.
 
 ### QRY-007 Unknown predicate
 
-**Error text**: `unknown predicate: 'between?'`
+**Error text**: `unknown predicate: '{}'`
 
 **Cause**: A `:where` clause invoked a predicate (expression function) that is not built-in and has not been registered via `db.register_predicate()`.
 
