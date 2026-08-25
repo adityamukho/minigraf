@@ -180,7 +180,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-002 Unexpected character
 
-**Error text**: `Unexpected character: @`
+**Error text**: `Unexpected character: {}`
 
 **Cause**: Tokeniser encountered a character not valid in Datalog/EDN. Common culprits: `@`, `#` outside a tagged literal, `\`, smart quotes.
 
@@ -197,7 +197,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-003 Unexpected token
 
-**Error text**: `Unexpected token: Keyword(":find")`
+**Error text**: `Unexpected token: {}`
 
 **Cause**: Parser encountered a token in a position where it cannot appear. Often caused by missing/misplaced delimiter, or keyword where symbol/value expected.
 
@@ -260,7 +260,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-007 String exceeds maximum length
 
-**Error text**: `String exceeds maximum length of 4096 bytes`
+**Error text**: `String exceeds maximum length of {} bytes`
 
 **Cause**: A string value in the input exceeds 4096 bytes. Minigraf limits string lengths to keep the parser bounded.
 
@@ -276,7 +276,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-008 Keyword exceeds maximum length
 
-**Error text**: `Keyword exceeds maximum length of 4096 bytes`
+**Error text**: `Keyword exceeds maximum length of {} bytes`
 
 **Cause**: An attribute keyword in the input exceeds 4096 bytes.
 
@@ -292,7 +292,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-009 Tagged literal exceeds maximum length
 
-**Error text**: `Tagged literal exceeds maximum length of 4096 bytes`
+**Error text**: `Tagged literal exceeds maximum length of {} bytes`
 
 **Cause**: The string inside a `#uuid "..."` or other tagged literal exceeds 4096 bytes. UUIDs are 36 characters; anything longer indicates a malformed input.
 
@@ -323,7 +323,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-011 Unknown command
 
-**Error text**: `Unknown command: upsert`
+**Error text**: `Unknown command: {}`
 
 **Cause**: The opening symbol is not a recognised command. Check spelling.
 
@@ -385,7 +385,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-015 :as-of counter must be non-negative
 
-**Error text**: `:as-of counter must be non-negative, got -1`
+**Error text**: `:as-of counter must be non-negative, got {}`
 
 **Cause**: Transaction counters start at 1. A negative integer was passed to `:as-of`.
 
@@ -402,7 +402,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-016 :as-of must be integer or ISO 8601 string
 
-**Error text**: `:as-of must be an integer (counter) or ISO 8601 string, got :now`
+**Error text**: `:as-of must be an integer (counter) or ISO 8601 string, got {}`
 
 **Cause**: `:as-of` value is neither an integer transaction count nor an ISO 8601 timestamp string.
 
@@ -434,7 +434,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-018 :valid-at must be ISO 8601 or :any-valid-time
 
-**Error text**: `:valid-at must be an ISO 8601 string or :any-valid-time, got 42`
+**Error text**: `:valid-at must be an ISO 8601 string or :any-valid-time, got {}`
 
 **Cause**: `:valid-at` value is not an ISO 8601 string or the special keyword `:any-valid-time`.
 
@@ -450,7 +450,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-019 :valid-from must be ISO 8601
 
-**Error text**: `:valid-from must be an ISO 8601 string, got 42`
+**Error text**: `:valid-from must be an ISO 8601 string, got {}`
 
 **Cause**: The `:valid-from` key in a fact's option map must be an ISO 8601 string, not an integer or keyword.
 
@@ -466,7 +466,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-020 :valid-to must be ISO 8601
 
-**Error text**: `:valid-to must be an ISO 8601 string, got :forever`
+**Error text**: `:valid-to must be an ISO 8601 string, got {}`
 
 **Cause**: The `:valid-to` key in a fact's option map must be an ISO 8601 string.
 
@@ -501,7 +501,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-022 :with variable not bound in :where
 
-**Error text**: `':with' variable ?x not bound in :where`
+**Error text**: `':with' variable {} not bound in :where`
 
 **Cause**: A variable listed in `:with` does not appear in any `:where` pattern.
 
@@ -519,7 +519,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-023 Aggregate variable not bound in :where
 
-**Error text**: `Aggregate variable ?amount not bound in :where`
+**Error text**: `Aggregate variable {} not bound in :where`
 
 **Cause**: An aggregate's input variable (e.g. `(sum ?amount)`) is not bound by any `:where` pattern.
 
@@ -536,7 +536,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-024 Aggregate expression must have exactly 2 elements
 
-**Error text**: `Aggregate expression must have exactly 2 elements (func ?var), got 3`
+**Error text**: `Aggregate expression must have exactly 2 elements (func ?var), got {}`
 
 **Cause**: An aggregate expression in `:find` must be `(function ?variable)` — exactly two elements.
 
@@ -553,7 +553,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-025 Aggregate function name must be a symbol
 
-**Error text**: `Aggregate function name must be a symbol, got Keyword(":sum")`
+**Error text**: `Aggregate function name must be a symbol, got {}`
 
 **Cause**: The aggregate function name must be an unqualified symbol, not a keyword.
 
@@ -587,7 +587,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-027 Window function requires :over clause
 
-**Error text**: `'rank' is a window function and requires an ':over (...)' clause`
+**Error text**: `'{}' is a window function and requires an ':over (...)' clause`
 
 **Cause**: Window functions (`rank`, `row-number`, `dense-rank`, `ntile`, `percent-rank`, `cume-dist`) must be accompanied by an `:over` clause specifying ordering and/or partitioning.
 
@@ -638,7 +638,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-030 lag/lead not supported in this version
 
-**Error text**: `'lag' is not supported in this version; lag/lead are planned for a future release`
+**Error text**: `'{}' is not supported in this version; lag/lead are planned for a future release`
 
 **Cause**: The `lag` and `lead` window functions are not yet implemented in this version.
 
@@ -655,7 +655,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-031 Function is not window-compatible
 
-**Error text**: `'sum' is not window-compatible and cannot be used with ':over'`
+**Error text**: `'{}' is not window-compatible and cannot be used with ':over'`
 
 **Cause**: The named function is a plain aggregate, not a window function. Only `rank`, `row-number`, `dense-rank`, `ntile`, `percent-rank`, and `cume-dist` support `:over`.
 
@@ -672,7 +672,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-032 Function requires variable argument before :over
 
-**Error text**: `'ntile' requires a variable argument (starting with ?) before ':over'`
+**Error text**: `'{}' requires a variable argument (starting with ?) before ':over'`
 
 **Cause**: `ntile` requires a variable and then an `:over` clause: `(ntile ?bucket :over (:order-by ?score))`.
 
@@ -689,7 +689,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-033 Function requires :over after variable argument
 
-**Error text**: `'ntile' requires ':over' after the variable argument`
+**Error text**: `'{}' requires ':over' after the variable argument`
 
 **Cause**: `ntile` was given a variable but no `:over` clause followed.
 
@@ -706,7 +706,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-034 Function requires :over immediately after function name
 
-**Error text**: `'rank' requires ':over' immediately after the function name (no variable argument)`
+**Error text**: `'{}' requires ':over' immediately after the function name (no variable argument)`
 
 **Cause**: `rank`, `row-number`, `dense-rank`, `percent-rank`, and `cume-dist` take no variable — they take `:over` directly. A variable was placed between the function name and `:over`.
 
@@ -791,7 +791,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-039 Unknown option in :over clause
 
-**Error text**: `unknown option in ':over' clause: ':ascending'`
+**Error text**: `unknown option in ':over' clause: '{}'`
 
 **Cause**: An unrecognised keyword appeared inside the `:over` list. Valid options are `:order-by` and `:partition-by`.
 
@@ -808,7 +808,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-040 Unexpected element in :over clause
 
-**Error text**: `unexpected element in ':over' clause: Integer(5)`
+**Error text**: `unexpected element in ':over' clause: {}`
 
 **Cause**: A non-keyword, non-variable element appeared inside the `:over` list.
 
@@ -900,7 +900,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-046 Fact must have at least 3 elements (E A V)
 
-**Error text**: `Fact must have at least 3 elements (E A V), got 2`
+**Error text**: `Fact must have at least 3 elements (E A V), got {}`
 
 **Cause**: Each fact must supply at minimum an entity, an attribute, and a value.
 
@@ -916,7 +916,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-047 Optional 4th fact element must be a map
 
-**Error text**: `Optional 4th element of a fact must be a map {:valid-from ... :valid-to ...}, got "2024-01-01"`
+**Error text**: `Optional 4th element of a fact must be a map {:valid-from ... :valid-to ...}, got {}`
 
 **Cause**: The 4th element of a fact vector is not a map.
 
@@ -1065,7 +1065,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-056 (or-join) join variables must be logic variables
 
-**Error text**: `(or-join) join variables must be logic variables, got Keyword(":e")`
+**Error text**: `(or-join) join variables must be logic variables, got {}`
 
 **Cause**: Join variables in `(or-join [?e ...])` must start with `?`.
 
@@ -1135,7 +1135,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-060 Expected pattern vector or rule invocation in :where clause
 
-**Error text**: `Expected pattern vector or rule invocation in :where clause, got Keyword(":name")`
+**Error text**: `Expected pattern vector or rule invocation in :where clause, got {}`
 
 **Cause**: Something other than a pattern vector `[...]` or a list-form clause appeared directly in `:where`.
 
@@ -1152,7 +1152,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-061 Unexpected element in query
 
-**Error text**: `Unexpected element in query: Keyword(":limit")`
+**Error text**: `Unexpected element in query: {}`
 
 **Cause**: An unrecognised key appeared at the top level of the query map.
 
@@ -1186,7 +1186,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-063 Expression head must be a symbol
 
-**Error text**: `expression head must be a symbol, got Keyword(":+")`
+**Error text**: `expression head must be a symbol, got {}`
 
 **Cause**: The first element of an expression must be a symbol naming a function, not a keyword.
 
@@ -1203,7 +1203,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-064 Function takes exactly 1 argument
 
-**Error text**: `abs takes exactly 1 argument`
+**Error text**: `{} takes exactly 1 argument`
 
 **Cause**: A built-in operator that takes 1 argument was given a different number.
 
@@ -1221,7 +1221,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-065 Function takes exactly 2 arguments
 
-**Error text**: `+ takes exactly 2 arguments`
+**Error text**: `{} takes exactly 2 arguments`
 
 **Cause**: A built-in operator that takes 2 arguments was given a different number.
 
@@ -1256,7 +1256,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-067 Unknown expression operator
 
-**Error text**: `unknown expression operator: floor-div`
+**Error text**: `unknown expression operator: {}`
 
 **Cause**: An expression clause used a function name that Minigraf does not recognise. Built-in operators include: `+`, `-`, `*`, `/`, `mod`, `quot`, `abs`, `min`, `max`, `str`, `not`, `=`, `!=`, `<`, `<=`, `>`, `>=`, `matches?`, `starts-with?`, `ends-with?`, `contains?`.
 
@@ -1274,7 +1274,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-068 Expression clause must be [(expr)] or [(expr) ?out]
 
-**Error text**: `expression clause must be [(expr)] or [(expr) ?out], got 3 elements`
+**Error text**: `expression clause must be [(expr)] or [(expr) ?out], got {} elements`
 
 **Cause**: An expression clause in `:where` must be a 1- or 2-element outer vector: `[(predicate)]` or `[(expr) ?out]`. A 3+ element outer vector is invalid.
 
@@ -1291,7 +1291,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-069 Expression output must be a ?variable
 
-**Error text**: `expression output must be a ?variable, got Keyword(":result")`
+**Error text**: `expression output must be a ?variable, got {}`
 
 **Cause**: The output binding in `[(expr) ?out]` is not a logic variable starting with `?`.
 
@@ -1308,7 +1308,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-070 Unsupported expression argument
 
-**Error text**: `unsupported expression argument: Map({...})`
+**Error text**: `unsupported expression argument: {}`
 
 **Cause**: An argument inside an expression is of a type that the expression engine cannot accept (e.g. a nested map or list).
 
@@ -1358,7 +1358,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-073 Unknown tagged literal
 
-**Error text**: `Unknown tagged literal: #base64`
+**Error text**: `Unknown tagged literal: #{}`
 
 **Cause**: A `#tag "..."` form used an unrecognised tag. Only `#uuid` is supported.
 
@@ -1374,7 +1374,7 @@ See the [Datalog Reference](../../.wiki/Datalog-Reference.md) for syntax guidanc
 
 ### PRS-074 Bind slot name exceeds maximum length
 
-**Error text**: `Bind slot name exceeds maximum length of 4096 bytes`
+**Error text**: `Bind slot name exceeds maximum length of {} bytes`
 
 **Cause**: A prepared-query bind slot name `$name` in a `prepare()` call exceeds 4096 bytes.
 
@@ -1390,7 +1390,7 @@ $<4097-char-slot-name>
 
 ### PRS-075 Transact rejects unexpected trailing argument(s)
 
-**Error text**: `transact takes (transact [facts]) or (transact {opts} [facts]); found N unexpected trailing argument(s) — the valid-time options map must come BEFORE the facts vector, not after`
+**Error text**: `transact takes (transact [facts]) or (transact {opts} [facts]); found {} unexpected trailing argument(s) — the valid-time options map must come BEFORE the facts vector, not after`
 
 **Cause**: `(transact ...)` was called with more top-level arguments than it accepts — either extra tokens after the facts vector, or the valid-time options map placed after the facts vector instead of before it. Earlier parser versions silently dropped these extra arguments (and any `:valid-from`/`:valid-to` in a misplaced map); this is now a hard error.
 
@@ -1407,7 +1407,7 @@ $<4097-char-slot-name>
 
 ### PRS-076 Retract rejects unexpected trailing argument(s)
 
-**Error text**: `retract takes (retract [facts]); found N unexpected trailing argument(s)`
+**Error text**: `retract takes (retract [facts]); found {} unexpected trailing argument(s)`
 
 **Cause**: `(retract ...)` was called with more than one top-level argument. `retract` only accepts a single facts vector — unlike `transact`, it does not accept a leading options map.
 
@@ -1423,7 +1423,7 @@ $<4097-char-slot-name>
 
 ### PRS-077 Unexpected trailing input after a complete form
 
-**Error text**: `unexpected trailing input after a complete form: {token}`
+**Error text**: `unexpected trailing input after a complete form: {}`
 
 **Cause**: The top-level input contains a syntactically complete EDN form (e.g. a fully closed list or vector) followed by additional tokens. Earlier parser versions silently stopped after the first complete form instead of rejecting the extra input.
 
@@ -1439,7 +1439,7 @@ $<4097-char-slot-name>
 
 ### PRS-078 Query rejects unexpected trailing argument(s)
 
-**Error text**: `query takes (query [...]); found N unexpected trailing argument(s)`
+**Error text**: `query takes (query [...]); found {} unexpected trailing argument(s)`
 
 **Cause**: `(query ...)` was called with more than one top-level argument. All query options (`:find`, `:where`, `:as-of`, `:max-results`, etc.) must appear as keywords *inside* the query vector, not as sibling arguments after it. Earlier parser versions silently dropped these trailing arguments.
 
@@ -1455,7 +1455,7 @@ $<4097-char-slot-name>
 
 ### PRS-079 Rule rejects unexpected trailing argument(s)
 
-**Error text**: `rule takes (rule [...]); found N unexpected trailing argument(s)`
+**Error text**: `rule takes (rule [...]); found {} unexpected trailing argument(s)`
 
 **Cause**: `(rule ...)` was called with more than one top-level argument. A rule definition is a single vector containing the rule head and body patterns; nothing may follow it.
 

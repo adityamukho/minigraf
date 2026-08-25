@@ -86,6 +86,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string-matches error output is affected, including the interactive REPL's
   printed error messages and all 7 language-binding repos (Python, Node,
   WASM, Java, Android, Swift, C).
+- **`src/query/datalog/parser.rs` now carries real `PRS-0xx` codes instead of
+  falling back to `INT-000`** (#358, #277 2/6). All 79 documented `PRS-0xx`
+  codes are wired up via `bail_coded!`/`err_coded!` at every parser call site
+  that maps onto one; a parse error's `.code()` is now e.g. `"PRS-005"`
+  ("Unclosed list") instead of the generic `"INT-000"`, and its
+  `Display`/`to_string()` prefix changes to match. `parser.rs`'s internal
+  signatures changed from `Result<_, String>` to `anyhow::Result<_>`
+  (crate-internal only — the public `db.execute()`/`db.prepare()` surface is
+  unchanged, still `Result<T, MinigrafError>`). Two documented codes,
+  PRS-028 ("window expression cannot be empty") and PRS-049 ("unexpected end
+  of fact vector"), are wired up but unreachable through the public API — the
+  `has_over`/`len() >= 4` conditions that guard their call sites already
+  guarantee the "bad" case can't occur, so no input reaches them. This is a
+  pre-existing property of the parser logic, not something this PR changed.
+  Two static message strings changed wording to match their
+  `docs/ERROR_REFERENCE.md` "Error text" verbatim (previously drifted):
+  `"Retract argument must be a vector"` → `"...must be a vector of facts"`
+  (PRS-044). Anything that string-matches parser error output — including
+  the interactive REPL and all 7 language-binding repos — is affected by
+  both the code prefix and this wording change.
 
 ### Bug fixes
 

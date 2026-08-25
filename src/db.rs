@@ -537,7 +537,7 @@ impl Minigraf {
             );
         }
 
-        let cmd = parse_datalog_command(input).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let cmd = parse_datalog_command(input)?;
 
         // Determine if this is a read-only command (query only).
         // Rule registration is treated as a write because it mutates the shared RuleRegistry.
@@ -775,7 +775,7 @@ impl Minigraf {
     ) -> Result<crate::query::datalog::prepared::PreparedQuery> {
         use crate::query::datalog::prepared::prepare_query;
 
-        let cmd = parse_datalog_command(query_str).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let cmd = parse_datalog_command(query_str)?;
 
         let query = match cmd {
             DatalogCommand::Query(q) => q,
@@ -1068,7 +1068,7 @@ impl<'a> WriteTransaction<'a> {
     }
 
     fn execute_inner(&mut self, input: &str) -> Result<QueryResult> {
-        let cmd = parse_datalog_command(input).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let cmd = parse_datalog_command(input)?;
 
         match cmd {
             DatalogCommand::Transact(tx) => {
