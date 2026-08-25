@@ -11,6 +11,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   dispatch-bindings:
     name: Dispatch to binding repos
