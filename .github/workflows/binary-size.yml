@@ -14,7 +14,7 @@ jobs:
     name: Check release binary size
     runs-on: ubuntu-latest
     env:
-      SIZE_LIMIT_BYTES: 1048576  # 1 MiB — project goal is <1MB
+      SIZE_LIMIT_BYTES: 1228800  # 1200 KiB — raised from 1 MiB for #277's structured error codes; see PHILOSOPHY.md §4
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
