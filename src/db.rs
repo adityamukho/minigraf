@@ -1631,13 +1631,21 @@ mod tests {
 
     #[test]
     fn test_sync_mode_defaults_to_full() {
-        assert_eq!(OpenOptions::default().synchronous, SyncMode::Full, "default sync mode");
+        assert_eq!(
+            OpenOptions::default().synchronous,
+            SyncMode::Full,
+            "default sync mode"
+        );
     }
 
     #[test]
     fn test_sync_mode_builder_sets_normal() {
         let opts = OpenOptions::new().synchronous(SyncMode::Normal);
-        assert_eq!(opts.synchronous, SyncMode::Normal, "builder should set Normal");
+        assert_eq!(
+            opts.synchronous,
+            SyncMode::Normal,
+            "builder should set Normal"
+        );
     }
 
     // ── file-backed: normal sync mode survives checkpoint and reopen ─────────────
@@ -1653,14 +1661,19 @@ mod tests {
                 .path(&path)
                 .open()
                 .unwrap();
-            db.execute(r#"(transact [[:alice :name "Alice"]])"#).unwrap();
+            db.execute(r#"(transact [[:alice :name "Alice"]])"#)
+                .unwrap();
             db.execute(r#"(transact [[:bob :name "Bob"]])"#).unwrap();
             db.checkpoint().unwrap();
         }
 
         let db = Minigraf::open(&path).unwrap();
         let facts = db.inner.fact_storage.get_asserted_facts().unwrap();
-        assert_eq!(facts.len(), 2, "both facts should survive checkpoint + reopen under Normal sync mode");
+        assert_eq!(
+            facts.len(),
+            2,
+            "both facts should survive checkpoint + reopen under Normal sync mode"
+        );
     }
 
     // ── failed commit leaves database unchanged ───────────────────────────────
