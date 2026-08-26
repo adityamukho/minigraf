@@ -35,12 +35,15 @@ pub enum ErrorCategory {
 /// downstream `match`.
 ///
 /// Deliberately does NOT derive `Debug`: this enum's variant count tracks
-/// every documented error code (130 once all six #277 category PRs land),
-/// and a derived `Debug` impl generates a per-variant string-literal match
-/// arm that's pure binary-size cost with no runtime use anywhere in this
-/// crate (nothing formats an `ErrorCode` with `{:?}` — [`CodedError`]'s own
+/// every documented error code (186, as of #277's final API+INT category PR
+/// — 130 originally documented `PRS`/`QRY`/`STG`/`WAL`/`API` codes plus 55
+/// `INT-0xx` codes assigned to the crate's remaining previously-uncoded
+/// call sites, plus the original `INT-000` catch-all), and a derived
+/// `Debug` impl generates a per-variant string-literal match arm that's
+/// pure binary-size cost with no runtime use anywhere in this crate
+/// (nothing formats an `ErrorCode` with `{:?}` — [`CodedError`]'s own
 /// hand-written `Debug` below only needs the already-formatted `message`
-/// and the code string, not this enum). Keeps the project's <1MB binary
+/// and the code string, not this enum). Keeps the project's binary
 /// size goal (see PHILOSOPHY.md) affordable as the registry grows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCode {
@@ -166,6 +169,70 @@ pub(crate) enum ErrorCode {
     Wal004,
     Wal005,
     Wal006,
+    Api001,
+    Api002,
+    Api003,
+    Api004,
+    Api005,
+    Api006,
+    Api007,
+    Api008,
+    Api009,
+    Int001,
+    Int002,
+    Int003,
+    Int004,
+    Int005,
+    Int006,
+    Int007,
+    Int008,
+    Int009,
+    Int010,
+    Int011,
+    Int012,
+    Int013,
+    Int014,
+    Int015,
+    Int016,
+    Int017,
+    Int018,
+    Int019,
+    Int020,
+    Int021,
+    Int022,
+    Int023,
+    Int024,
+    Int025,
+    Int026,
+    Int027,
+    Int028,
+    Int029,
+    Int030,
+    Int031,
+    Int032,
+    Int033,
+    Int034,
+    Int035,
+    Int036,
+    Int037,
+    Int038,
+    Int039,
+    Int040,
+    Int041,
+    Int042,
+    Int043,
+    Int044,
+    Int045,
+    Int046,
+    Int047,
+    Int048,
+    Int049,
+    Int050,
+    Int051,
+    Int052,
+    Int053,
+    Int054,
+    Int055,
 }
 
 /// Single source of truth: (code, code string, message template, category).
@@ -905,6 +972,390 @@ pub(crate) const REGISTRY: &[(ErrorCode, &str, &str, ErrorCategory)] = &[
         "failed to delete WAL file {}: {}",
         ErrorCategory::Wal,
     ),
+    (
+        ErrorCode::Api001,
+        "API-001",
+        "write lock is poisoned; database may be in an inconsistent state",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api002,
+        "API-002",
+        "unexpected command variant in write path",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api003,
+        "API-003",
+        "attribute must be a keyword",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api004,
+        "API-004",
+        "cannot transact a pseudo-attribute",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api005,
+        "API-005",
+        "only (query ...) commands can be prepared; got transact",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api006,
+        "API-006",
+        "only (query ...) commands can be prepared; got retract",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api007,
+        "API-007",
+        "only (query ...) commands can be prepared; got rule",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api008,
+        "API-008",
+        "function registry lock poisoned: PoisonError { .. }",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Api009,
+        "API-009",
+        "WAL not initialized",
+        ErrorCategory::Api,
+    ),
+    (
+        ErrorCode::Int001,
+        "INT-001",
+        "a WriteTransaction is already in progress on this thread; use tx.execute() instead",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int002,
+        "INT-002",
+        "invalid entity: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int003,
+        "INT-003",
+        "invalid value: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int004,
+        "INT-004",
+        "invalid timestamp: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int005,
+        "INT-005",
+        "millisecond value {} is outside the supported datetime range",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int006,
+        "INT-006",
+        "internal parser error: expected {} token",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int007,
+        "INT-007",
+        "Float literal out of range: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int008,
+        "INT-008",
+        "Integer literal out of range: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int009,
+        "INT-009",
+        "Symbol exceeds maximum length of {} bytes",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int010,
+        "INT-010",
+        "Exceeded maximum recursion depth of {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int011,
+        "INT-011",
+        "unexpected end of {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int012,
+        "INT-012",
+        "duplicate {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int013,
+        "INT-013",
+        "{} requires a value",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int014,
+        "INT-014",
+        "{} must be >= 1",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int015,
+        "INT-015",
+        "{} must be a positive integer",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int016,
+        "INT-016",
+        "(or)/(or-join) cannot appear inside (not)/(not-join)",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int017,
+        "INT-017",
+        "pseudo-attribute {} is not valid in {} position",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int018,
+        "INT-018",
+        "{} {} in {} is not bound by any {} clause",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int019,
+        "INT-019",
+        "datalog parser: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int020,
+        "INT-020",
+        "evaluator: iteration or result limit exceeded: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int021,
+        "INT-021",
+        "evaluator: unsupported where-clause in evaluate_rule: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int022,
+        "INT-022",
+        "datalog evaluator: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int023,
+        "INT-023",
+        "packed page: fact record exceeds slot capacity: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int024,
+        "INT-024",
+        "packed page: malformed page data: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int025,
+        "INT-025",
+        "internal: unsubstituted :valid-at bind slot reached the executor",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int026,
+        "INT-026",
+        "temporal pseudo-attributes :db/valid-from, :db/valid-to, :db/tx-count, and :db/tx-id require :any-valid-time; add :any-valid-time to your query",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int027,
+        "INT-027",
+        "query has no :where clause, rules, or aggregates — nothing binds the variables. Add a :where clause (e.g., [:find ?e ?a ?v :where [?e ?a ?v]]) or use an aggregate.",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int028,
+        "INT-028",
+        "Rule invocation '{}' must have 1 or 2 arguments, got {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int029,
+        "INT-029",
+        "unknown aggregate function: '{}'",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int030,
+        "INT-030",
+        "unknown window function '{}' — register it with register_aggregate() before querying",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int031,
+        "INT-031",
+        "or-join variable {} is not bound in the incoming scope",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int032,
+        "INT-032",
+        "query executor: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int033,
+        "INT-033",
+        "missing bind value for slot '${}'",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int034,
+        "INT-034",
+        "bind slot '${}' is not permitted in attribute position; the query optimizer selects an index based on the attribute at prepare time and cannot handle a parameterised attribute",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int035,
+        "INT-035",
+        "slot '${}' in {} position requires {}, got {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int036,
+        "INT-036",
+        "header too short: need {}..{}, got {} bytes",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int037,
+        "INT-037",
+        "header: slice at {} not exactly {} bytes",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int038,
+        "INT-038",
+        "header too short for {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int039,
+        "INT-039",
+        "Invalid magic number",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int040,
+        "INT-040",
+        "{} '{}' is already registered",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int041,
+        "INT-041",
+        "sum: expected Integer, Float, or Null, got {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int042,
+        "INT-042",
+        "min/max: no non-null values in group",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int043,
+        "INT-043",
+        "{}: cannot compare {} and {} values",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int044,
+        "INT-044",
+        "{}: expected Integer, Float, String, or Null, got {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int045,
+        "INT-045",
+        "pending fact index {} out of bounds",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int046,
+        "INT-046",
+        "no CommittedFactReader but got committed FactRef (page_id={})",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int047,
+        "INT-047",
+        "into_backend: backend Arc has multiple owners",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int048,
+        "INT-048",
+        "storage: arithmetic overflow: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int049,
+        "INT-049",
+        "storage: internal invariant violation: {}",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int050,
+        "INT-050",
+        "{} lock poisoned",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int051,
+        "INT-051",
+        "Invalid page size: {} bytes (expected {})",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int052,
+        "INT-052",
+        "Page {} not found",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int053,
+        "INT-053",
+        "Header checksum mismatch: possible file corruption. Database may be damaged.",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int054,
+        "INT-054",
+        "unstratifiable: predicate '{}' is involved in a negative cycle through '{}'",
+        ErrorCategory::Internal,
+    ),
+    (
+        ErrorCode::Int055,
+        "INT-055",
+        "rule predicate '{}' disappeared during rollback",
+        ErrorCategory::Internal,
+    ),
 ];
 
 pub(crate) fn registry_entry(code: ErrorCode) -> (&'static str, &'static str, ErrorCategory) {
@@ -971,9 +1422,9 @@ pub(crate) struct CodedError {
 
 impl CodedError {
     /// `#[cold]`/`#[inline(never)]`: `bail_coded!`/`err_coded!` expand to a
-    /// call to this at every one of the (currently ~50, eventually ~250+
-    /// once all six #277 category PRs land) error call sites across the
-    /// crate. Error construction is by definition the cold path, so forcing
+    /// call to this at every one of the (roughly 300, now that #277's six
+    /// category PRs have all landed) error call sites across the crate.
+    /// Error construction is by definition the cold path, so forcing
     /// it out of line keeps the lookup + `format_template` call from being
     /// duplicated inline at each one — pure binary-size cost for a path
     /// that, unlike the argument-array construction immediately at the call
@@ -1298,7 +1749,71 @@ mod tests {
                 | ErrorCode::Wal003
                 | ErrorCode::Wal004
                 | ErrorCode::Wal005
-                | ErrorCode::Wal006 => assert_has_registry_entry(code),
+                | ErrorCode::Wal006
+                | ErrorCode::Api001
+                | ErrorCode::Api002
+                | ErrorCode::Api003
+                | ErrorCode::Api004
+                | ErrorCode::Api005
+                | ErrorCode::Api006
+                | ErrorCode::Api007
+                | ErrorCode::Api008
+                | ErrorCode::Api009
+                | ErrorCode::Int001
+                | ErrorCode::Int002
+                | ErrorCode::Int003
+                | ErrorCode::Int004
+                | ErrorCode::Int005
+                | ErrorCode::Int006
+                | ErrorCode::Int007
+                | ErrorCode::Int008
+                | ErrorCode::Int009
+                | ErrorCode::Int010
+                | ErrorCode::Int011
+                | ErrorCode::Int012
+                | ErrorCode::Int013
+                | ErrorCode::Int014
+                | ErrorCode::Int015
+                | ErrorCode::Int016
+                | ErrorCode::Int017
+                | ErrorCode::Int018
+                | ErrorCode::Int019
+                | ErrorCode::Int020
+                | ErrorCode::Int021
+                | ErrorCode::Int022
+                | ErrorCode::Int023
+                | ErrorCode::Int024
+                | ErrorCode::Int025
+                | ErrorCode::Int026
+                | ErrorCode::Int027
+                | ErrorCode::Int028
+                | ErrorCode::Int029
+                | ErrorCode::Int030
+                | ErrorCode::Int031
+                | ErrorCode::Int032
+                | ErrorCode::Int033
+                | ErrorCode::Int034
+                | ErrorCode::Int035
+                | ErrorCode::Int036
+                | ErrorCode::Int037
+                | ErrorCode::Int038
+                | ErrorCode::Int039
+                | ErrorCode::Int040
+                | ErrorCode::Int041
+                | ErrorCode::Int042
+                | ErrorCode::Int043
+                | ErrorCode::Int044
+                | ErrorCode::Int045
+                | ErrorCode::Int046
+                | ErrorCode::Int047
+                | ErrorCode::Int048
+                | ErrorCode::Int049
+                | ErrorCode::Int050
+                | ErrorCode::Int051
+                | ErrorCode::Int052
+                | ErrorCode::Int053
+                | ErrorCode::Int054
+                | ErrorCode::Int055 => assert_has_registry_entry(code),
             }
         }
 
@@ -1425,6 +1940,70 @@ mod tests {
             ErrorCode::Wal004,
             ErrorCode::Wal005,
             ErrorCode::Wal006,
+            ErrorCode::Api001,
+            ErrorCode::Api002,
+            ErrorCode::Api003,
+            ErrorCode::Api004,
+            ErrorCode::Api005,
+            ErrorCode::Api006,
+            ErrorCode::Api007,
+            ErrorCode::Api008,
+            ErrorCode::Api009,
+            ErrorCode::Int001,
+            ErrorCode::Int002,
+            ErrorCode::Int003,
+            ErrorCode::Int004,
+            ErrorCode::Int005,
+            ErrorCode::Int006,
+            ErrorCode::Int007,
+            ErrorCode::Int008,
+            ErrorCode::Int009,
+            ErrorCode::Int010,
+            ErrorCode::Int011,
+            ErrorCode::Int012,
+            ErrorCode::Int013,
+            ErrorCode::Int014,
+            ErrorCode::Int015,
+            ErrorCode::Int016,
+            ErrorCode::Int017,
+            ErrorCode::Int018,
+            ErrorCode::Int019,
+            ErrorCode::Int020,
+            ErrorCode::Int021,
+            ErrorCode::Int022,
+            ErrorCode::Int023,
+            ErrorCode::Int024,
+            ErrorCode::Int025,
+            ErrorCode::Int026,
+            ErrorCode::Int027,
+            ErrorCode::Int028,
+            ErrorCode::Int029,
+            ErrorCode::Int030,
+            ErrorCode::Int031,
+            ErrorCode::Int032,
+            ErrorCode::Int033,
+            ErrorCode::Int034,
+            ErrorCode::Int035,
+            ErrorCode::Int036,
+            ErrorCode::Int037,
+            ErrorCode::Int038,
+            ErrorCode::Int039,
+            ErrorCode::Int040,
+            ErrorCode::Int041,
+            ErrorCode::Int042,
+            ErrorCode::Int043,
+            ErrorCode::Int044,
+            ErrorCode::Int045,
+            ErrorCode::Int046,
+            ErrorCode::Int047,
+            ErrorCode::Int048,
+            ErrorCode::Int049,
+            ErrorCode::Int050,
+            ErrorCode::Int051,
+            ErrorCode::Int052,
+            ErrorCode::Int053,
+            ErrorCode::Int054,
+            ErrorCode::Int055,
         ] {
             exhaustive(code);
         }
@@ -1530,18 +2109,17 @@ mod tests {
         assert!(err.source().is_some());
     }
 
-    /// `docs/ERROR_REFERENCE.md` already documents all 130 codes (from #192)
-    /// before #277 starts touching runtime codes — the doc isn't built up
-    /// incrementally alongside `REGISTRY`, it's already complete. So this
-    /// test can only check `REGISTRY` is a content-matched subset of the
-    /// doc (every registry entry's code+template appears in the doc
-    /// verbatim) — not that every documented code has a registry entry yet.
-    /// A documented code with no registry entry just means that call site
-    /// hasn't been migrated. The final category PR (once every remaining
-    /// call site is audited and coded) should upgrade this to a full
-    /// bidirectional equality check.
+    /// `docs/ERROR_REFERENCE.md` and `REGISTRY` must now be in full
+    /// bidirectional agreement: every `REGISTRY` entry's code+template
+    /// appears in the doc verbatim, AND every documented `### CODE` section
+    /// with an "Error text" line has a matching `REGISTRY` entry. This is
+    /// only safe now that #277's final category PR (API+INT) has audited
+    /// and coded every remaining `bail!`/`anyhow!` call site crate-wide —
+    /// before that, a documented code with no registry entry just meant
+    /// that call site hadn't been migrated yet (see the design spec's
+    /// "Directionality note").
     #[test]
-    fn registry_is_a_subset_of_error_reference_doc() {
+    fn registry_matches_error_reference_doc_bidirectionally() {
         let doc = include_str!("../docs/ERROR_REFERENCE.md");
         let mut doc_entries: std::collections::HashMap<String, String> = Default::default();
         let mut lines = doc.lines().peekable();
@@ -1570,6 +2148,7 @@ mod tests {
             }
         }
 
+        // Direction 1: every REGISTRY entry's code+template appears in the doc verbatim.
         for (_, code_str, template, _) in REGISTRY {
             match doc_entries.get(*code_str) {
                 Some(doc_text) => assert_eq!(
@@ -1578,6 +2157,16 @@ mod tests {
                 ),
                 None => panic!("REGISTRY has a code with no ERROR_REFERENCE.md entry at all"),
             }
+        }
+
+        // Direction 2: every documented code has a REGISTRY row.
+        let registry_codes: std::collections::HashSet<&str> =
+            REGISTRY.iter().map(|(_, code_str, ..)| *code_str).collect();
+        for doc_code in doc_entries.keys() {
+            assert!(
+                registry_codes.contains(doc_code.as_str()),
+                "ERROR_REFERENCE.md documents a code with no REGISTRY entry"
+            );
         }
     }
 

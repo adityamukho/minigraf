@@ -1,5 +1,5 @@
 /// File-based storage backend for native platforms.
-use crate::error::{ErrorCode, bail_coded};
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::storage::{FileHeader, PAGE_SIZE, StorageBackend};
 use anyhow::Result;
 use std::fs::{File, OpenOptions};
@@ -321,7 +321,7 @@ impl FileBackend {
         let mut page = vec![0u8; PAGE_SIZE];
         let hlen = header_bytes.len();
         page.get_mut(..hlen)
-            .ok_or_else(|| anyhow::anyhow!("header bytes exceed page size"))?
+            .ok_or_else(|| err_coded!(ErrorCode::Int049, "header bytes exceed page size"))?
             .copy_from_slice(&header_bytes);
 
         file.write_all(&page)?;
@@ -340,16 +340,15 @@ impl FileBackend {
 impl StorageBackend for FileBackend {
     fn write_page(&mut self, page_id: u64, data: &[u8]) -> Result<()> {
         if data.len() != PAGE_SIZE {
-            anyhow::bail!(
-                "Invalid page size: {} bytes (expected {})",
-                data.len(),
-                PAGE_SIZE
-            );
+            bail_coded!(ErrorCode::Int051, data.len(), PAGE_SIZE);
         }
 
-        let offset = page_id
-            .checked_mul(PAGE_SIZE as u64)
-            .ok_or_else(|| anyhow::anyhow!("page offset overflow for page_id {}", page_id))?;
+        let offset = page_id.checked_mul(PAGE_SIZE as u64).ok_or_else(|| {
+            err_coded!(
+                ErrorCode::Int048,
+                format!("page offset overflow for page_id {page_id}")
+            )
+        })?;
         self.file.seek(SeekFrom::Start(offset))?;
         self.file.write_all(data)?;
 
@@ -369,9 +368,12 @@ impl StorageBackend for FileBackend {
             // every time, so the on-disk header is self-consistent at
             // every single-page write, not just at the deliberate commits
             // in `PersistentFactStorage::save`.
-            self.header.page_count = page_id
-                .checked_add(1)
-                .ok_or_else(|| anyhow::anyhow!("page_count overflow for page_id {}", page_id))?;
+            self.header.page_count = page_id.checked_add(1).ok_or_else(|| {
+                err_coded!(
+                    ErrorCode::Int048,
+                    format!("page_count overflow for page_id {page_id}")
+                )
+            })?;
             self.header.header_checksum =
                 crate::storage::persistent_facts::compute_header_checksum(&self.header);
             Self::write_header(&mut self.file, &self.header)?;
@@ -382,16 +384,21 @@ impl StorageBackend for FileBackend {
 
     fn read_page(&self, page_id: u64) -> Result<Vec<u8>> {
         if page_id >= self.header.page_count {
-            anyhow::bail!(
-                "Page {} out of bounds (total pages: {})",
-                page_id,
-                self.header.page_count
+            bail_coded!(
+                ErrorCode::Int049,
+                format!(
+                    "Page {page_id} out of bounds (total pages: {})",
+                    self.header.page_count
+                )
             );
         }
 
-        let offset = page_id
-            .checked_mul(PAGE_SIZE as u64)
-            .ok_or_else(|| anyhow::anyhow!("page offset overflow for page_id {}", page_id))?;
+        let offset = page_id.checked_mul(PAGE_SIZE as u64).ok_or_else(|| {
+            err_coded!(
+                ErrorCode::Int048,
+                format!("page offset overflow for page_id {page_id}")
+            )
+        })?;
         let mut file = &self.file;
         file.seek(SeekFrom::Start(offset))?;
 

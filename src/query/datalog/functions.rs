@@ -1,3 +1,4 @@
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::types::Value;
 use std::any::Any;
 use std::collections::HashMap;
@@ -322,7 +323,7 @@ impl FunctionRegistry {
         desc: AggregateDesc,
     ) -> anyhow::Result<()> {
         if self.aggregates.contains_key(&name) {
-            anyhow::bail!("aggregate function '{}' is already registered", name);
+            bail_coded!(ErrorCode::Int040, "aggregate function", name);
         }
         self.aggregates.insert(name, desc);
         Ok(())
@@ -335,7 +336,7 @@ impl FunctionRegistry {
         desc: PredicateDesc,
     ) -> anyhow::Result<()> {
         if self.predicates.contains_key(&name) {
-            anyhow::bail!("predicate '{}' is already registered", name);
+            bail_coded!(ErrorCode::Int040, "predicate", name);
         }
         self.predicates.insert(name, desc);
         Ok(())
@@ -428,10 +429,7 @@ pub fn apply_builtin_aggregate(name: &str, values: &[&Value]) -> anyhow::Result<
                         Value::Float(f) => sum += f,
                         Value::Integer(i) => sum += *i as f64,
                         other => {
-                            return Err(anyhow::anyhow!(
-                                "sum: expected Integer, Float, or Null, got {}",
-                                value_type_name(other)
-                            ));
+                            return Err(err_coded!(ErrorCode::Int041, value_type_name(other)));
                         }
                     }
                 }
@@ -442,10 +440,7 @@ pub fn apply_builtin_aggregate(name: &str, values: &[&Value]) -> anyhow::Result<
                     match v {
                         Value::Integer(i) => sum = sum.saturating_add(*i),
                         other => {
-                            return Err(anyhow::anyhow!(
-                                "sum: expected Integer, Float, or Null, got {}",
-                                value_type_name(other)
-                            ));
+                            return Err(err_coded!(ErrorCode::Int041, value_type_name(other)));
                         }
                     }
                 }
@@ -455,16 +450,16 @@ pub fn apply_builtin_aggregate(name: &str, values: &[&Value]) -> anyhow::Result<
 
         "min" | "max" => {
             if values.is_empty() {
-                return Err(anyhow::anyhow!("min/max: no non-null values in group"));
+                return Err(err_coded!(ErrorCode::Int042));
             }
             let first = values
                 .first()
                 .copied()
-                .ok_or_else(|| anyhow::anyhow!("min/max: no non-null values in group"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int042))?;
             for v in values.get(1..).unwrap_or(&[]) {
                 if std::mem::discriminant(*v) != std::mem::discriminant(first) {
-                    return Err(anyhow::anyhow!(
-                        "{}: cannot compare {} and {} values",
+                    return Err(err_coded!(
+                        ErrorCode::Int043,
                         name,
                         value_type_name(first),
                         value_type_name(v)
@@ -479,11 +474,7 @@ pub fn apply_builtin_aggregate(name: &str, values: &[&Value]) -> anyhow::Result<
                     }
                     (Value::String(a), Value::String(b)) => a.cmp(b),
                     (_, other) => {
-                        return Err(anyhow::anyhow!(
-                            "{}: expected Integer, Float, String, or Null, got {}",
-                            name,
-                            value_type_name(other)
-                        ));
+                        return Err(err_coded!(ErrorCode::Int044, name, value_type_name(other)));
                     }
                 };
                 let replace = if name == "min" {
@@ -522,7 +513,7 @@ pub fn apply_builtin_aggregate(name: &str, values: &[&Value]) -> anyhow::Result<
             }
         }
 
-        other => Err(anyhow::anyhow!("unknown aggregate function: '{}'", other)),
+        other => Err(err_coded!(ErrorCode::Int029, other)),
     }
 }
 

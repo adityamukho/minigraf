@@ -15,7 +15,7 @@ use crate::graph::types::{Fact, TxId, VALID_TIME_FOREVER};
 /// in any practical context, avoiding the collision that `0` would have with the Unix
 /// epoch (1970-01-01T00:00:00Z), which is a legitimate `valid_from` value.
 pub(crate) const VALID_FROM_USE_TX_TIME: i64 = i64::MIN;
-use crate::error::MinigrafError;
+use crate::error::{ErrorCode, MinigrafError, bail_coded, err_coded};
 use crate::graph::FactStorage;
 use crate::graph::types::Value;
 use crate::query::datalog::evaluator::DEFAULT_MAX_DERIVED_FACTS;
@@ -34,7 +34,7 @@ use crate::storage::backend::file::FileBackend;
 use crate::storage::persistent_facts::PersistentFactStorage;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::wal::WalWriter;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::any::Any;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -532,9 +532,7 @@ impl Minigraf {
     fn execute_inner(&self, input: &str) -> Result<QueryResult> {
         // Detect same-thread reentrant write (would deadlock on the Mutex).
         if is_write_tx_active() {
-            bail!(
-                "a WriteTransaction is already in progress on this thread; use tx.execute() instead"
-            );
+            bail_coded!(ErrorCode::Int001);
         }
 
         let cmd = parse_datalog_command(input)?;
@@ -547,9 +545,11 @@ impl Minigraf {
         );
 
         if is_write {
-            let mut ctx = self.inner.write_lock.lock().map_err(|_| {
-                anyhow::anyhow!("write lock is poisoned; database may be in an inconsistent state")
-            })?;
+            let mut ctx = self
+                .inner
+                .write_lock
+                .lock()
+                .map_err(|_| err_coded!(ErrorCode::Api001))?;
 
             // Handle write commands with correct WAL-first ordering for Transact/Retract:
             // 1. Materialize facts (no storage mutation yet)
@@ -570,7 +570,7 @@ impl Minigraf {
                     );
                     return executor.execute(cmd);
                 }
-                _ => return Err(anyhow::anyhow!("unexpected command variant in write path")),
+                _ => return Err(err_coded!(ErrorCode::Api002)),
             };
 
             let tx_count = self.inner.fact_storage.allocate_tx_count();
@@ -646,13 +646,13 @@ impl Minigraf {
 
     fn begin_write_inner(&self) -> Result<WriteTransaction<'_>> {
         if is_write_tx_active() {
-            bail!(
-                "a WriteTransaction is already in progress on this thread; use tx.execute() instead"
-            );
+            bail_coded!(ErrorCode::Int001);
         }
-        let guard = self.inner.write_lock.lock().map_err(|_| {
-            anyhow::anyhow!("write lock is poisoned; database may be in an inconsistent state")
-        })?;
+        let guard = self
+            .inner
+            .write_lock
+            .lock()
+            .map_err(|_| err_coded!(ErrorCode::Api001))?;
         // Set flag only after successfully acquiring the lock
         set_write_tx_active(true);
         Ok(WriteTransaction {
@@ -680,9 +680,11 @@ impl Minigraf {
     }
 
     fn checkpoint_inner(&self) -> Result<()> {
-        let mut ctx = self.inner.write_lock.lock().map_err(|_| {
-            anyhow::anyhow!("write lock is poisoned; database may be in an inconsistent state")
-        })?;
+        let mut ctx = self
+            .inner
+            .write_lock
+            .lock()
+            .map_err(|_| err_coded!(ErrorCode::Api001))?;
         Self::do_checkpoint(&self.inner.fact_storage, &mut ctx)
     }
 
@@ -780,13 +782,13 @@ impl Minigraf {
         let query = match cmd {
             DatalogCommand::Query(q) => q,
             DatalogCommand::Transact(_) => {
-                anyhow::bail!("only (query ...) commands can be prepared; got transact")
+                bail_coded!(ErrorCode::Api005);
             }
             DatalogCommand::Retract(_) => {
-                anyhow::bail!("only (query ...) commands can be prepared; got retract")
+                bail_coded!(ErrorCode::Api006);
             }
             DatalogCommand::Rule(_) => {
-                anyhow::bail!("only (query ...) commands can be prepared; got rule")
+                bail_coded!(ErrorCode::Api007);
             }
         };
 
@@ -842,17 +844,17 @@ impl Minigraf {
         let mut facts = Vec::new();
 
         for pattern in &tx.facts {
-            let entity = edn_to_entity_id(&pattern.entity)
-                .map_err(|e| anyhow::anyhow!("invalid entity: {}", e))?;
+            let entity =
+                edn_to_entity_id(&pattern.entity).map_err(|e| err_coded!(ErrorCode::Int002, e))?;
 
             let attr = match &pattern.attribute {
                 AttributeSpec::Real(EdnValue::Keyword(k)) => k.clone(),
-                AttributeSpec::Real(_) => anyhow::bail!("attribute must be a keyword"),
-                AttributeSpec::Pseudo(_) => anyhow::bail!("cannot transact a pseudo-attribute"),
+                AttributeSpec::Real(_) => bail_coded!(ErrorCode::Api003),
+                AttributeSpec::Pseudo(_) => bail_coded!(ErrorCode::Api004),
             };
 
-            let value = edn_to_value(&pattern.value)
-                .map_err(|e| anyhow::anyhow!("invalid value: {}", e))?;
+            let value =
+                edn_to_value(&pattern.value).map_err(|e| err_coded!(ErrorCode::Int003, e))?;
 
             let valid_from = pattern
                 .valid_from
@@ -879,17 +881,17 @@ impl Minigraf {
         let mut facts = Vec::new();
 
         for pattern in &tx.facts {
-            let entity = edn_to_entity_id(&pattern.entity)
-                .map_err(|e| anyhow::anyhow!("invalid entity: {}", e))?;
+            let entity =
+                edn_to_entity_id(&pattern.entity).map_err(|e| err_coded!(ErrorCode::Int002, e))?;
 
             let attr = match &pattern.attribute {
                 AttributeSpec::Real(EdnValue::Keyword(k)) => k.clone(),
-                AttributeSpec::Real(_) => anyhow::bail!("attribute must be a keyword"),
-                AttributeSpec::Pseudo(_) => anyhow::bail!("cannot transact a pseudo-attribute"),
+                AttributeSpec::Real(_) => bail_coded!(ErrorCode::Api003),
+                AttributeSpec::Pseudo(_) => bail_coded!(ErrorCode::Api004),
             };
 
-            let value = edn_to_value(&pattern.value)
-                .map_err(|e| anyhow::anyhow!("invalid value: {}", e))?;
+            let value =
+                edn_to_value(&pattern.value).map_err(|e| err_coded!(ErrorCode::Int003, e))?;
 
             let mut f = Fact::retract(entity, attr, value, 0);
             f.tx_count = 0;
@@ -973,7 +975,7 @@ impl Minigraf {
         self.inner
             .functions
             .write()
-            .map_err(|e| anyhow::anyhow!("function registry lock poisoned: {}", e))?
+            .map_err(|_| err_coded!(ErrorCode::Api008))?
             .register_aggregate_desc(name.to_string(), desc)
     }
 
@@ -1017,7 +1019,7 @@ impl Minigraf {
         self.inner
             .functions
             .write()
-            .map_err(|e| anyhow::anyhow!("function registry lock poisoned: {}", e))?
+            .map_err(|_| err_coded!(ErrorCode::Api008))?
             .register_predicate_desc(name.to_string(), desc)
     }
 }
@@ -1236,9 +1238,7 @@ impl<'a> WriteTransaction<'a> {
                     *wal = Some(WalWriter::open_or_create(&wal_path, opts.synchronous)?);
                 }
 
-                let wal_writer = wal
-                    .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("WAL not initialized"))?;
+                let wal_writer = wal.as_mut().ok_or_else(|| err_coded!(ErrorCode::Api009))?;
                 wal_writer.append_entry(tx_count, facts)?;
                 pfs.mark_dirty();
                 *wal_entry_count = wal_entry_count.saturating_add(1);
@@ -1605,12 +1605,98 @@ mod tests {
             .execute(r#"(transact [[:bob :person/name "Bob"]])"#)
             .unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("WriteTransaction is already in progress"),
-            "expected reentrant-write error, got: {}",
-            err
-        );
+        assert_eq!(err.code(), "INT-001");
+    }
+
+    #[test]
+    fn test_same_thread_reentrant_begin_write_returns_error() {
+        let db = Minigraf::in_memory().unwrap();
+
+        let _tx = db.begin_write().unwrap();
+
+        // While _tx is active, begin_write() on the same thread should fail fast
+        // (INT-001, same code as the execute()-path reentrancy check above).
+        let Err(err) = db.begin_write() else {
+            panic!("expected begin_write() to fail");
+        };
+
+        assert_eq!(err.code(), "INT-001");
+    }
+
+    // ── API-001: write lock poisoned ───────────────────────────────────────────
+
+    #[test]
+    fn test_write_lock_poisoned_returns_api001() {
+        let db = Minigraf::in_memory().unwrap();
+
+        // Poison the write-lock mutex by panicking while holding it.
+        let poison_db = db.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poison_db.inner.write_lock.lock().unwrap();
+            panic!("intentionally poisoning the write lock for a test");
+        }));
+
+        let err = db
+            .execute(r#"(transact [[:bob :person/name "Bob"]])"#)
+            .unwrap_err();
+        assert_eq!(err.code(), "API-001");
+
+        let Err(err) = db.begin_write() else {
+            panic!("expected begin_write() to fail");
+        };
+        assert_eq!(err.code(), "API-001");
+
+        let err = db.checkpoint().unwrap_err();
+        assert_eq!(err.code(), "API-001");
+    }
+
+    // ── API-005/006/007: only query commands can be prepared ──────────────────
+
+    #[test]
+    fn test_prepare_transact_returns_api005() {
+        let db = Minigraf::in_memory().unwrap();
+        let err = db
+            .prepare(r#"(transact [[:bob :person/name "Bob"]])"#)
+            .unwrap_err();
+        assert_eq!(err.code(), "API-005");
+    }
+
+    #[test]
+    fn test_prepare_retract_returns_api006() {
+        let db = Minigraf::in_memory().unwrap();
+        let err = db
+            .prepare(r#"(retract [[:bob :person/name "Bob"]])"#)
+            .unwrap_err();
+        assert_eq!(err.code(), "API-006");
+    }
+
+    #[test]
+    fn test_prepare_rule_returns_api007() {
+        let db = Minigraf::in_memory().unwrap();
+        let err = db
+            .prepare("(rule [(ancestor ?x ?y) [?x :parent ?y]])")
+            .unwrap_err();
+        assert_eq!(err.code(), "API-007");
+    }
+
+    // ── API-008: function registry lock poisoned ───────────────────────────────
+
+    #[test]
+    fn test_function_registry_lock_poisoned_returns_api008() {
+        use crate::graph::types::Value;
+
+        let db = Minigraf::in_memory().unwrap();
+
+        let poison_db = db.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poison_db.inner.functions.write().unwrap();
+            panic!("intentionally poisoning the function registry lock for a test");
+        }));
+
+        let err = db
+            .register_predicate("always_true", |_: &Value| true)
+            .unwrap_err();
+        assert_eq!(err.code(), "API-008");
     }
 
     // ── thread-local flag cleared after commit ────────────────────────────────
@@ -1931,10 +2017,8 @@ mod tests {
             valid_to: None,
         };
         let r = Minigraf::materialize_transaction(&tx);
-        assert!(
-            r.is_err(),
-            "materialize_transaction with non-keyword Real attr must fail"
-        );
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "API-003");
     }
 
     #[test]
@@ -1952,10 +2036,8 @@ mod tests {
             valid_to: None,
         };
         let r = Minigraf::materialize_retraction(&tx);
-        assert!(
-            r.is_err(),
-            "materialize_retraction with non-keyword Real attr must fail"
-        );
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "API-003");
     }
 
     #[test]
@@ -1973,10 +2055,8 @@ mod tests {
             valid_to: None,
         };
         let r = Minigraf::materialize_transaction(&tx);
-        assert!(
-            r.is_err(),
-            "materialize_transaction with pseudo-attr must fail"
-        );
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "API-004");
     }
 
     #[test]
@@ -1994,10 +2074,80 @@ mod tests {
             valid_to: None,
         };
         let r = Minigraf::materialize_retraction(&tx);
-        assert!(
-            r.is_err(),
-            "materialize_retraction with pseudo-attr must fail"
-        );
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "API-004");
+    }
+
+    #[test]
+    fn test_materialize_transaction_invalid_entity_returns_int002() {
+        use crate::query::datalog::types::EdnValue;
+        use crate::query::datalog::types::{Pattern, Transaction};
+        let tx = Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Boolean(true), // not resolvable to an entity id
+                EdnValue::Keyword(":person/name".to_string()),
+                EdnValue::String("Alice".to_string()),
+            )],
+            valid_from: None,
+            valid_to: None,
+        };
+        let r = Minigraf::materialize_transaction(&tx);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "INT-002");
+    }
+
+    #[test]
+    fn test_materialize_retraction_invalid_entity_returns_int002() {
+        use crate::query::datalog::types::EdnValue;
+        use crate::query::datalog::types::{Pattern, Transaction};
+        let tx = Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Boolean(true),
+                EdnValue::Keyword(":person/name".to_string()),
+                EdnValue::String("Alice".to_string()),
+            )],
+            valid_from: None,
+            valid_to: None,
+        };
+        let r = Minigraf::materialize_retraction(&tx);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "INT-002");
+    }
+
+    #[test]
+    fn test_materialize_transaction_invalid_value_returns_int003() {
+        use crate::query::datalog::types::EdnValue;
+        use crate::query::datalog::types::{Pattern, Transaction};
+        let tx = Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Keyword(":alice".to_string()),
+                EdnValue::Keyword(":person/tags".to_string()),
+                EdnValue::Vector(vec![]), // not a storable Value
+            )],
+            valid_from: None,
+            valid_to: None,
+        };
+        let r = Minigraf::materialize_transaction(&tx);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "INT-003");
+    }
+
+    #[test]
+    fn test_materialize_retraction_invalid_value_returns_int003() {
+        use crate::query::datalog::types::EdnValue;
+        use crate::query::datalog::types::{Pattern, Transaction};
+        let tx = Transaction {
+            facts: vec![Pattern::new(
+                EdnValue::Keyword(":alice".to_string()),
+                EdnValue::Keyword(":person/tags".to_string()),
+                EdnValue::Vector(vec![]),
+            )],
+            valid_from: None,
+            valid_to: None,
+        };
+        let r = Minigraf::materialize_retraction(&tx);
+        let err: crate::error::MinigrafError = r.unwrap_err().into();
+        assert_eq!(err.code(), "INT-003");
     }
 
     // ── begin_write flag not leaked on lock failure ────────────────────────────────

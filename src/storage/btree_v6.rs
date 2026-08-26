@@ -4,11 +4,11 @@
 //! `build_btree` does a bulk-build (write-all-leaves, then internal levels
 //! bottom-up). Range scans traverse the tree through the cache.
 
-use crate::error::{ErrorCode, bail_coded};
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::storage::cache::PageCache;
 use crate::storage::index::FactRef;
 use crate::storage::{PAGE_SIZE, StorageBackend};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -35,26 +35,28 @@ const PAGE_FILL_BYTES: usize = PAGE_SIZE * 3 / 4;
 
 /// Read a u16 from 2 bytes at the given offset, returning an error if out of bounds.
 fn read_u16_at(page: &[u8], offset: usize) -> Result<u16> {
-    let bytes = page
-        .get(offset..offset.saturating_add(2))
-        .ok_or_else(|| anyhow!("out of bounds: read_u16 at {offset} (len {})", page.len()))?;
-    Ok(u16::from_le_bytes(
-        bytes
-            .try_into()
-            .map_err(|_| anyhow!("slice at {offset} not 2 bytes"))?,
-    ))
+    let bytes = page.get(offset..offset.saturating_add(2)).ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int049,
+            format!("out of bounds: read_u16 at {offset} (len {})", page.len())
+        )
+    })?;
+    Ok(u16::from_le_bytes(bytes.try_into().map_err(|_| {
+        err_coded!(ErrorCode::Int049, format!("slice at {offset} not 2 bytes"))
+    })?))
 }
 
 /// Read a u64 from 8 bytes at the given offset, returning an error if out of bounds.
 fn read_u64_at(page: &[u8], offset: usize) -> Result<u64> {
-    let bytes = page
-        .get(offset..offset.saturating_add(8))
-        .ok_or_else(|| anyhow!("out of bounds: read_u64 at {offset} (len {})", page.len()))?;
-    Ok(u64::from_le_bytes(
-        bytes
-            .try_into()
-            .map_err(|_| anyhow!("slice at {offset} not 8 bytes"))?,
-    ))
+    let bytes = page.get(offset..offset.saturating_add(8)).ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int049,
+            format!("out of bounds: read_u64 at {offset} (len {})", page.len())
+        )
+    })?;
+    Ok(u64::from_le_bytes(bytes.try_into().map_err(|_| {
+        err_coded!(ErrorCode::Int049, format!("slice at {offset} not 8 bytes"))
+    })?))
 }
 
 // ─── Low-level page writers ───────────────────────────────────────────────────
@@ -71,8 +73,12 @@ fn write_leaf_page(
     entries: &[Vec<u8>],
     next_leaf: u64,
 ) -> Result<()> {
-    let entry_count =
-        u16::try_from(entries.len()).map_err(|_| anyhow!("too many entries: {}", entries.len()))?;
+    let entry_count = u16::try_from(entries.len()).map_err(|_| {
+        err_coded!(
+            ErrorCode::Int049,
+            format!("too many entries: {}", entries.len())
+        )
+    })?;
     let mut page = vec![0u8; PAGE_SIZE];
 
     // Fixed header
@@ -87,10 +93,18 @@ fn write_leaf_page(
         write_pos -= entry.len();
         page[write_pos..write_pos + entry.len()].copy_from_slice(entry);
         let slot_off = LEAF_HEADER_SIZE + i * SLOT_SIZE;
-        let write_pos_u16 =
-            u16::try_from(write_pos).map_err(|_| anyhow!("write_pos {write_pos} exceeds u16"))?;
-        let entry_len_u16 = u16::try_from(entry.len())
-            .map_err(|_| anyhow!("entry len {} exceeds u16", entry.len()))?;
+        let write_pos_u16 = u16::try_from(write_pos).map_err(|_| {
+            err_coded!(
+                ErrorCode::Int048,
+                format!("write_pos {write_pos} exceeds u16")
+            )
+        })?;
+        let entry_len_u16 = u16::try_from(entry.len()).map_err(|_| {
+            err_coded!(
+                ErrorCode::Int048,
+                format!("entry len {} exceeds u16", entry.len())
+            )
+        })?;
         page[slot_off..slot_off + 2].copy_from_slice(&write_pos_u16.to_le_bytes());
         page[slot_off + 2..slot_off + 4].copy_from_slice(&entry_len_u16.to_le_bytes());
     }
@@ -119,11 +133,15 @@ fn write_internal_page(
     if child_ids.is_empty() {
         bail_coded!(ErrorCode::Stg011);
     }
-    let key_count = u16::try_from(sep_bytes.len())
-        .map_err(|_| anyhow!("too many sep keys: {}", sep_bytes.len()))?;
+    let key_count = u16::try_from(sep_bytes.len()).map_err(|_| {
+        err_coded!(
+            ErrorCode::Int049,
+            format!("too many sep keys: {}", sep_bytes.len())
+        )
+    })?;
     let rightmost_child = *child_ids
         .last()
-        .ok_or_else(|| anyhow!("child_ids is empty"))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int049, format!("child_ids is empty")))?;
 
     let mut page = vec![0u8; PAGE_SIZE];
 
@@ -149,10 +167,18 @@ fn write_internal_page(
         write_pos -= sep.len();
         page[write_pos..write_pos + sep.len()].copy_from_slice(sep);
         let slot_off = slot_dir_start + i * SLOT_SIZE;
-        let write_pos_u16 =
-            u16::try_from(write_pos).map_err(|_| anyhow!("write_pos {write_pos} exceeds u16"))?;
-        let sep_len_u16 =
-            u16::try_from(sep.len()).map_err(|_| anyhow!("sep len {} exceeds u16", sep.len()))?;
+        let write_pos_u16 = u16::try_from(write_pos).map_err(|_| {
+            err_coded!(
+                ErrorCode::Int048,
+                format!("write_pos {write_pos} exceeds u16")
+            )
+        })?;
+        let sep_len_u16 = u16::try_from(sep.len()).map_err(|_| {
+            err_coded!(
+                ErrorCode::Int048,
+                format!("sep len {} exceeds u16", sep.len())
+            )
+        })?;
         page[slot_off..slot_off + 2].copy_from_slice(&write_pos_u16.to_le_bytes());
         page[slot_off + 2..slot_off + 4].copy_from_slice(&sep_len_u16.to_le_bytes());
     }
@@ -217,7 +243,10 @@ pub fn build_btree(
         if projected > PAGE_FILL_BYTES && !cur_entries.is_empty() {
             write_leaf_page(backend, cache, next_page, &cur_entries, 0)?;
             let first_key = cur_first_key.take().ok_or_else(|| {
-                anyhow::anyhow!("BUG: cur_first_key empty when writing leaf page")
+                err_coded!(
+                    ErrorCode::Int049,
+                    format!("BUG: cur_first_key empty when writing leaf page")
+                )
             })?;
             leaf_infos.push((next_page, first_key));
             next_page += 1;
@@ -242,7 +271,10 @@ pub fn build_btree(
     if !cur_entries.is_empty() {
         write_leaf_page(backend, cache, next_page, &cur_entries, 0)?;
         let first_key = cur_first_key.take().ok_or_else(|| {
-            anyhow::anyhow!("BUG: cur_first_key empty when flushing last leaf page")
+            err_coded!(
+                ErrorCode::Int049,
+                format!("BUG: cur_first_key empty when flushing last leaf page")
+            )
         })?;
         leaf_infos.push((next_page, first_key));
         next_page += 1;
@@ -252,17 +284,27 @@ pub fn build_btree(
     for i in 0..leaf_infos.len() - 1 {
         let (pid, _) = leaf_infos
             .get(i)
-            .ok_or_else(|| anyhow!("leaf_infos[{i}] out of bounds"))?
+            .ok_or_else(|| err_coded!(ErrorCode::Int049, format!("leaf_infos[{i}] out of bounds")))?
             .clone();
         let (next_lid, _) = leaf_infos
             .get(i + 1)
-            .ok_or_else(|| anyhow!("leaf_infos[{}] out of bounds", i + 1))?
+            .ok_or_else(|| {
+                err_coded!(
+                    ErrorCode::Int049,
+                    format!("leaf_infos[{}] out of bounds", i + 1)
+                )
+            })?
             .clone();
         let cached = cache.get_or_load(pid, backend)?;
         let mut page = (*cached).clone();
         // Safety: page is PAGE_SIZE bytes; offset 4..12 is always valid
         page.get_mut(4..12)
-            .ok_or_else(|| anyhow!("page too small to write next_leaf"))?
+            .ok_or_else(|| {
+                err_coded!(
+                    ErrorCode::Int049,
+                    format!("page too small to write next_leaf")
+                )
+            })?
             .copy_from_slice(&next_lid.to_le_bytes());
         backend.write_page(pid, &page)?;
         cache.put_dirty(pid, page);
@@ -273,7 +315,9 @@ pub fn build_btree(
         return Ok((
             leaf_infos
                 .first()
-                .ok_or_else(|| anyhow!("leaf_infos unexpectedly empty"))?
+                .ok_or_else(|| {
+                    err_coded!(ErrorCode::Int049, format!("leaf_infos unexpectedly empty"))
+                })?
                 .0,
             next_page,
         ));
@@ -287,7 +331,12 @@ pub fn build_btree(
             return Ok((
                 current_level
                     .first()
-                    .ok_or_else(|| anyhow!("current_level unexpectedly empty"))?
+                    .ok_or_else(|| {
+                        err_coded!(
+                            ErrorCode::Int049,
+                            format!("current_level unexpectedly empty")
+                        )
+                    })?
                     .0,
                 next_page,
             ));
@@ -298,18 +347,24 @@ pub fn build_btree(
 
         while i < current_level.len() {
             let i_start = i;
-            let first_entry = current_level
-                .get(i)
-                .ok_or_else(|| anyhow!("current_level[{i}] out of bounds"))?;
+            let first_entry = current_level.get(i).ok_or_else(|| {
+                err_coded!(
+                    ErrorCode::Int049,
+                    format!("current_level[{i}] out of bounds")
+                )
+            })?;
             let mut child_ids: Vec<u64> = vec![first_entry.0];
             let mut sep_bytes: Vec<Vec<u8>> = Vec::new();
             let mut sep_data_bytes: usize = 0;
             i += 1;
 
             while i < current_level.len() {
-                let entry = current_level
-                    .get(i)
-                    .ok_or_else(|| anyhow!("current_level[{i}] out of bounds"))?;
+                let entry = current_level.get(i).ok_or_else(|| {
+                    err_coded!(
+                        ErrorCode::Int049,
+                        format!("current_level[{i}] out of bounds")
+                    )
+                })?;
                 let sep = entry.1.clone();
                 let projected = INTERNAL_HEADER_SIZE
                     + (child_ids.len() - 1) * 8
@@ -326,7 +381,12 @@ pub fn build_btree(
                 child_ids.push(
                     current_level
                         .get(i)
-                        .ok_or_else(|| anyhow!("current_level[{i}] out of bounds"))?
+                        .ok_or_else(|| {
+                            err_coded!(
+                                ErrorCode::Int049,
+                                format!("current_level[{i}] out of bounds")
+                            )
+                        })?
                         .0,
                 );
                 i += 1;
@@ -338,7 +398,12 @@ pub fn build_btree(
 
             let first_key = current_level
                 .get(i_start)
-                .ok_or_else(|| anyhow!("current_level[{i_start}] out of bounds"))?
+                .ok_or_else(|| {
+                    err_coded!(
+                        ErrorCode::Int049,
+                        format!("current_level[{i_start}] out of bounds")
+                    )
+                })?
                 .1
                 .clone();
             next_level.push((node_page_id, first_key));
@@ -377,10 +442,12 @@ fn find_leftmost_leaf(root: u64, backend: &dyn StorageBackend, cache: &PageCache
     let mut page_id = root;
     loop {
         let page = cache.get_or_load(page_id, backend)?;
-        let page_type = page
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("empty page at page_id={page_id}"))?;
+        let page_type = page.first().copied().ok_or_else(|| {
+            err_coded!(
+                ErrorCode::Int049,
+                format!("empty page at page_id={page_id}")
+            )
+        })?;
         match page_type {
             PAGE_TYPE_LEAF => return Ok(page_id),
             PAGE_TYPE_INTERNAL => {
@@ -391,10 +458,12 @@ fn find_leftmost_leaf(root: u64, backend: &dyn StorageBackend, cache: &PageCache
                     page_id = read_u64_at(&page[..], INTERNAL_HEADER_SIZE)?;
                 }
             }
-            t => anyhow::bail!(
-                "find_leftmost_leaf: unexpected page type 0x{:02x} at page_id={}",
-                t,
-                page_id
+            t => bail_coded!(
+                ErrorCode::Int049,
+                format!(
+                    "find_leftmost_leaf: unexpected page type 0x{:02x} at page_id={}",
+                    t, page_id
+                )
             ),
         }
     }
@@ -416,10 +485,12 @@ where
     let mut page_id = root;
     loop {
         let page = cache.get_or_load(page_id, backend)?;
-        let page_type = page
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("empty page at page_id={page_id}"))?;
+        let page_type = page.first().copied().ok_or_else(|| {
+            err_coded!(
+                ErrorCode::Int049,
+                format!("empty page at page_id={page_id}")
+            )
+        })?;
         match page_type {
             PAGE_TYPE_LEAF => return Ok(page_id),
             PAGE_TYPE_INTERNAL => {
@@ -436,10 +507,10 @@ where
                     let sep_slice = page
                         .get(sep_offset..sep_offset.saturating_add(sep_length))
                         .ok_or_else(|| {
-                            anyhow!(
+                            err_coded!(ErrorCode::Int049, format!(
                                 "sep slice out of bounds: offset={sep_offset} len={sep_length} page_len={}",
                                 page.len()
-                            )
+                            ))
                         })?;
                     let sep_key: K = postcard::from_bytes(sep_slice)?;
 
@@ -454,10 +525,12 @@ where
                     page_id = rightmost_child;
                 }
             }
-            t => anyhow::bail!(
-                "find_leaf_for_key: unexpected page type 0x{:02x} at page_id={}",
-                t,
-                page_id
+            t => bail_coded!(
+                ErrorCode::Int049,
+                format!(
+                    "find_leaf_for_key: unexpected page type 0x{:02x} at page_id={}",
+                    t, page_id
+                )
             ),
         }
     }
@@ -478,9 +551,12 @@ where
         let slice = page
             .get(offset..offset.saturating_add(length))
             .ok_or_else(|| {
-                anyhow!(
-                    "entry slice out of bounds: offset={offset} len={length} page_len={}",
-                    page.len()
+                err_coded!(
+                    ErrorCode::Int049,
+                    format!(
+                        "entry slice out of bounds: offset={offset} len={length} page_len={}",
+                        page.len()
+                    )
                 )
             })?;
         let (k, fr): (K, FactRef) = postcard::from_bytes(slice)?;
@@ -506,14 +582,19 @@ where
 
     loop {
         let page = cache.get_or_load(leaf_id, backend)?;
-        let page_type = page
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("empty page at page_id={leaf_id}"))?;
+        let page_type = page.first().copied().ok_or_else(|| {
+            err_coded!(
+                ErrorCode::Int049,
+                format!("empty page at page_id={leaf_id}")
+            )
+        })?;
         if page_type != PAGE_TYPE_LEAF {
-            anyhow::bail!(
-                "stream_all_entries: expected leaf page at page_id={}",
-                leaf_id
+            bail_coded!(
+                ErrorCode::Int049,
+                format!(
+                    "stream_all_entries: expected leaf page at page_id={}",
+                    leaf_id
+                )
             );
         }
         let next_leaf = read_u64_at(&page[..], 4)?;
@@ -551,10 +632,12 @@ where
 
     'outer: loop {
         let page = cache.get_or_load(leaf_id, backend)?;
-        let page_type = page
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("empty page at page_id={leaf_id}"))?;
+        let page_type = page.first().copied().ok_or_else(|| {
+            err_coded!(
+                ErrorCode::Int049,
+                format!("empty page at page_id={leaf_id}")
+            )
+        })?;
         if page_type != PAGE_TYPE_LEAF {
             bail_coded!(ErrorCode::Stg013, leaf_id);
         }
@@ -598,7 +681,7 @@ impl<B: StorageBackend> StorageBackend for MutexStorageBackend<B> {
     fn read_page(&self, page_id: u64) -> anyhow::Result<Vec<u8>> {
         self.0
             .lock()
-            .map_err(|e| anyhow!("MutexStorageBackend lock poisoned: {e}"))?
+            .map_err(|_| err_coded!(ErrorCode::Int050, "MutexStorageBackend"))?
             .read_page(page_id)
     }
 

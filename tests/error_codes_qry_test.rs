@@ -23,13 +23,15 @@
 //! branches) — see that file's "Stream 3: branches unreachable via the
 //! parser" test group.
 //!
-//! This file also locks in current (INT-000) behavior for two error families
-//! that live in this issue's in-scope files but have no documented QRY code:
-//! the recursive-rule iteration/derived-fact/result limit family in
+//! This file also covers two error families that live in this issue's
+//! in-scope files but have no documented QRY code: the recursive-rule
+//! iteration/derived-fact/result limit family in
 //! `src/query/datalog/evaluator.rs` (the "limit/depth-exceeded" and
 //! "recursion-error" paths), and the runtime aggregate type-mismatch family,
-//! which is raised in `src/query/datalog/functions.rs` — not one of this
-//! issue's five in-scope files, so it's out of scope for migration here.
+//! which is raised in `src/query/datalog/functions.rs`. Both were assigned
+//! `INT-0xx` codes (INT-020 and INT-041 respectively) by the #277 step 6
+//! (API+INT) category PR, which audited and coded every remaining uncoded
+//! call site crate-wide — see `docs/ERROR_REFERENCE.md`.
 
 use minigraf::Minigraf;
 
@@ -57,17 +59,16 @@ fn query_with_rules_unknown_predicate_returns_qry_007() {
     assert_eq!(err.code(), "QRY-007");
 }
 
-// ─── Limit/recursion-error family: no documented QRY code (INT-000) ───────
+// ─── Limit/recursion-error family: no documented QRY code (INT-020) ───────
 
 /// A recursive rule with an artificially tiny per-query `max_derived_facts`
 /// hits `RecursiveEvaluator::evaluate_recursive_rules`'s "Max derived facts
 /// per iteration exceeded" branch (src/query/datalog/evaluator.rs). No
 /// QRY-0xx code is documented for this in ERROR_REFERENCE.md — see the
-/// module doc comment above for why. This test locks in that it currently
-/// (and, for the scope of this PR, deliberately) surfaces as INT-000 rather
-/// than silently succeeding or panicking.
+/// module doc comment above for why. #277 step 6 assigned this shared
+/// "limit exceeded" family the INT-020 code.
 #[test]
-fn recursive_rule_derived_facts_limit_returns_int000() {
+fn recursive_rule_derived_facts_limit_returns_int020() {
     let db = Minigraf::in_memory().unwrap();
     db.execute(r#"(transact [[:a :connected :b] [:b :connected :c] [:c :connected :d]])"#)
         .unwrap();
@@ -85,7 +86,7 @@ fn recursive_rule_derived_facts_limit_returns_int000() {
             // rather than treat as a pass.
             panic!("expected the derived-facts limit to be exceeded");
         }
-        Err(err) => assert_eq!(err.code(), "INT-000"),
+        Err(err) => assert_eq!(err.code(), "INT-020"),
     }
 }
 
@@ -95,15 +96,14 @@ fn recursive_rule_derived_facts_limit_returns_int000() {
 /// error originates in `apply_builtin_aggregate`
 /// (src/query/datalog/functions.rs), which is NOT one of this issue's five
 /// in-scope files (executor.rs, evaluator.rs, optimizer.rs, matcher.rs,
-/// magic_sets.rs) — so it is intentionally left uncoded by this PR and
-/// currently surfaces as INT-000. Locked in here as a known, documented gap
-/// rather than left to silently regress.
+/// magic_sets.rs) — so it was intentionally left uncoded by this PR. #277
+/// step 6 (API+INT category PR) later assigned it INT-041.
 #[test]
-fn aggregate_type_mismatch_returns_int000() {
+fn aggregate_type_mismatch_returns_int041() {
     let db = Minigraf::in_memory().unwrap();
     db.execute(r#"(transact [[:a :score "high"] [:b :score "low"]])"#)
         .unwrap();
     let result = db.execute(r#"(query [:find (sum ?s) :where [?e :score ?s]])"#);
     let err = result.expect_err("sum of strings must fail at runtime");
-    assert_eq!(err.code(), "INT-000");
+    assert_eq!(err.code(), "INT-041");
 }

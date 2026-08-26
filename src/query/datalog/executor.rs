@@ -10,7 +10,7 @@ use super::types::{
 use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::FactStorage;
 use crate::graph::types::{Fact, TransactOptions, TxId, Value, tx_id_now};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -355,9 +355,7 @@ impl DatalogExecutor {
                 .collect(),
             Some(ValidAt::AnyValidTime) => asserted,
             Some(ValidAt::Slot(_)) => {
-                return Err(anyhow!(
-                    "internal: unsubstituted :valid-at bind slot reached the executor"
-                ));
+                return Err(err_coded!(ErrorCode::Int025));
             }
             None => asserted
                 .into_iter()
@@ -464,10 +462,7 @@ impl DatalogExecutor {
 
         // Warn about queries with no binding mechanism
         if !query.has_binding_mechanism() {
-            return Err(anyhow!(
-                "query has no :where clause, rules, or aggregates — nothing binds the variables. \
-                 Add a :where clause (e.g., [:find ?e ?a ?v :where [?e ?a ?v]]) or use an aggregate."
-            ));
+            return Err(err_coded!(ErrorCode::Int027));
         }
 
         // Compute query-level valid_at value for :db/valid-at pseudo-attribute binding.
@@ -476,9 +471,7 @@ impl DatalogExecutor {
             Some(ValidAt::Timestamp(t)) => Value::Integer(*t),
             Some(ValidAt::AnyValidTime) => Value::Null,
             Some(ValidAt::Slot(_)) => {
-                return Err(anyhow!(
-                    "internal: unsubstituted :valid-at bind slot reached the executor"
-                ));
+                return Err(err_coded!(ErrorCode::Int025));
             }
             None => Value::Integer(now),
         };
@@ -487,10 +480,7 @@ impl DatalogExecutor {
         if query_uses_per_fact_pseudo_attr(&query)
             && !matches!(query.valid_at, Some(ValidAt::AnyValidTime))
         {
-            return Err(anyhow!(
-                "temporal pseudo-attributes :db/valid-from, :db/valid-to, :db/tx-count, and \
-                 :db/tx-id require :any-valid-time; add :any-valid-time to your query"
-            ));
+            return Err(err_coded!(ErrorCode::Int026));
         }
 
         // Apply temporal filters before pattern matching
@@ -658,9 +648,7 @@ impl DatalogExecutor {
             Some(ValidAt::Timestamp(t)) => Value::Integer(*t),
             Some(ValidAt::AnyValidTime) => Value::Null,
             Some(ValidAt::Slot(_)) => {
-                return Err(anyhow!(
-                    "internal: unsubstituted :valid-at bind slot reached the executor"
-                ));
+                return Err(err_coded!(ErrorCode::Int025));
             }
             None => Value::Integer(now),
         };
@@ -669,10 +657,7 @@ impl DatalogExecutor {
         if query_uses_per_fact_pseudo_attr(&query)
             && !matches!(query.valid_at, Some(ValidAt::AnyValidTime))
         {
-            return Err(anyhow!(
-                "temporal pseudo-attributes :db/valid-from, :db/valid-to, :db/tx-count, and \
-                 :db/tx-id require :any-valid-time; add :any-valid-time to your query"
-            ));
+            return Err(err_coded!(ErrorCode::Int026));
         }
 
         // Apply temporal filters before evaluating recursive rules
@@ -784,11 +769,7 @@ impl DatalogExecutor {
                     Pattern::new(entity, EdnValue::Keyword(format!(":{}", predicate)), value)
                 }
                 n => {
-                    return Err(anyhow!(
-                        "Rule invocation '{}' must have 1 or 2 arguments, got {}",
-                        predicate,
-                        n
-                    ));
+                    return Err(err_coded!(ErrorCode::Int028, predicate, n));
                 }
             };
             plan_clauses.push(WhereClause::Pattern(pattern));
@@ -918,14 +899,15 @@ impl DatalogExecutor {
     /// Extract the predicate name from a rule head
     fn extract_predicate(&self, rule: &Rule) -> Result<String> {
         if rule.head.is_empty() {
-            return Err(anyhow!("Rule head cannot be empty"));
+            return Err(err_coded!(ErrorCode::Int032, "Rule head cannot be empty"));
         }
 
         // Safety: is_empty() check above guarantees index 0 exists.
         #[allow(clippy::indexing_slicing)]
         match &rule.head[0] {
             EdnValue::Symbol(s) => Ok(s.clone()),
-            _ => Err(anyhow!(
+            _ => Err(err_coded!(
+                ErrorCode::Int032,
                 "Rule head must start with a symbol (predicate name)"
             )),
         }
@@ -1505,7 +1487,7 @@ fn compute_aggregation(
                             apply_builtin_aggregate(func, &non_null)
                         }
                     }
-                    None => Err(anyhow::anyhow!("unknown aggregate function: '{}'", func)),
+                    None => Err(err_coded!(ErrorCode::Int029, func)),
                 };
                 match agg_val {
                     Ok(v) => {
@@ -1590,9 +1572,9 @@ fn apply_window_functions(
                 WindowFunc::RowNumber => {
                     let mut values = Vec::with_capacity(keyed.len());
                     for pos in 1..=keyed.len() {
-                        values.push(Value::Integer(
-                            i64::try_from(pos).map_err(|_| anyhow!("row number overflow"))?,
-                        ));
+                        values.push(Value::Integer(i64::try_from(pos).map_err(|_| {
+                            err_coded!(ErrorCode::Int032, "row number overflow")
+                        })?));
                     }
                     values
                 }
@@ -1616,12 +1598,9 @@ fn apply_window_functions(
                     // Accumulator-based: built-ins (sum, count, min, max, avg) and UDF aggregates.
                     // UDF aggregates (WindowFunc::Udf) also route here via registry lookup.
                     let func_name = ws.func_name();
-                    let desc = registry.get(&func_name).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "unknown window function '{}' — register it with register_aggregate() before querying",
-                            func_name
-                        )
-                    })?;
+                    let desc = registry
+                        .get(&func_name)
+                        .ok_or_else(|| err_coded!(ErrorCode::Int030, func_name.clone()))?;
 
                     let mut values = Vec::with_capacity(keyed.len());
                     // Safety: row_idx values come from enumerate() over bindings, so indices are valid.
@@ -1727,9 +1706,7 @@ pub(crate) fn evaluate_branch(
         Some(ValidAt::Timestamp(t)) => Value::Integer(*t),
         Some(ValidAt::AnyValidTime) => Value::Null,
         Some(ValidAt::Slot(_)) => {
-            return Err(anyhow!(
-                "internal: unsubstituted :valid-at bind slot reached the executor"
-            ));
+            return Err(err_coded!(ErrorCode::Int025));
         }
         None => Value::Integer(tx_id_now().cast_signed()),
     };
@@ -2076,7 +2053,7 @@ pub(crate) fn apply_or_clauses(
                 // if a join_var is missing from outer_keys (hash-join key would be partial).
                 for jv in join_vars.iter() {
                     if !outer_keys.contains(jv.as_str()) {
-                        anyhow::bail!("or-join variable {} is not bound in the incoming scope", jv);
+                        bail_coded!(ErrorCode::Int031, jv);
                     }
                 }
 

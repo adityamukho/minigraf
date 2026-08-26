@@ -31,7 +31,7 @@ use crate::error::{ErrorCode, err_coded};
 use crate::graph::FactStorage;
 use crate::graph::types::{Fact, Value};
 use crate::storage::index::encode_value;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
@@ -141,9 +141,12 @@ impl RecursiveEvaluator {
             iteration += 1;
 
             if iteration > self.max_iterations {
-                return Err(anyhow!(
-                    "Max iterations ({}) exceeded. Possible infinite recursion or cycle in rules.",
-                    self.max_iterations
+                return Err(err_coded!(
+                    ErrorCode::Int020,
+                    format!(
+                        "Max iterations ({}) exceeded. Possible infinite recursion or cycle in rules.",
+                        self.max_iterations
+                    )
                 ));
             }
 
@@ -152,9 +155,12 @@ impl RecursiveEvaluator {
 
             // Check per-iteration fact limit
             if new_facts.len() > self.max_derived_facts {
-                return Err(anyhow!(
-                    "Max derived facts per iteration ({}) exceeded. Rule may be generating too many facts.",
-                    self.max_derived_facts
+                return Err(err_coded!(
+                    ErrorCode::Int020,
+                    format!(
+                        "Max derived facts per iteration ({}) exceeded. Rule may be generating too many facts.",
+                        self.max_derived_facts
+                    )
                 ));
             }
 
@@ -166,9 +172,9 @@ impl RecursiveEvaluator {
                 if !seen_facts.contains(&key) {
                     // Check total result limit
                     if seen_facts.len() >= self.max_results {
-                        return Err(anyhow!(
-                            "Max query results ({}) exceeded.",
-                            self.max_results
+                        return Err(err_coded!(
+                            ErrorCode::Int020,
+                            format!("Max query results ({}) exceeded.", self.max_results)
                         ));
                     }
                     seen_facts.insert(key);
@@ -249,13 +255,15 @@ impl RecursiveEvaluator {
                 }
                 WhereClause::Not(_) => {
                     // Not clauses are handled by StratifiedEvaluator, not here.
-                    return Err(anyhow!(
+                    return Err(err_coded!(
+                        ErrorCode::Int021,
                         "WhereClause::Not in evaluate_rule: use StratifiedEvaluator for rules with negation"
                     ));
                 }
                 WhereClause::NotJoin { .. } => {
                     // NotJoin clauses are handled by StratifiedEvaluator, not here.
-                    return Err(anyhow!(
+                    return Err(err_coded!(
+                        ErrorCode::Int021,
                         "WhereClause::NotJoin in evaluate_rule: use StratifiedEvaluator for rules with negation"
                     ));
                 }
@@ -264,7 +272,8 @@ impl RecursiveEvaluator {
                 }
                 WhereClause::Or(_) | WhereClause::OrJoin { .. } => {
                     // Or/OrJoin rules are routed to the mixed_rules path by StratifiedEvaluator before reaching here.
-                    return Err(anyhow!(
+                    return Err(err_coded!(
+                        ErrorCode::Int021,
                         "WhereClause::Or/OrJoin in evaluate_rule: not yet implemented"
                     ));
                 }
@@ -304,17 +313,24 @@ impl RecursiveEvaluator {
     /// Example: (blocked ?x) -> [?x :blocked ?_rule_value]
     fn rule_invocation_to_pattern(&self, list: &[EdnValue]) -> Result<Pattern> {
         if list.is_empty() {
-            return Err(anyhow!("Rule invocation cannot be empty"));
+            return Err(err_coded!(
+                ErrorCode::Int022,
+                "Rule invocation cannot be empty"
+            ));
         }
         let predicate = match list.first() {
             Some(EdnValue::Symbol(s)) => s.clone(),
             Some(_) => {
-                return Err(anyhow!(
+                return Err(err_coded!(
+                    ErrorCode::Int022,
                     "Rule invocation must start with predicate name (symbol)"
                 ));
             }
             None => {
-                return Err(anyhow!("Rule invocation cannot be empty"));
+                return Err(err_coded!(
+                    ErrorCode::Int022,
+                    "Rule invocation cannot be empty"
+                ));
             }
         };
         let args: Vec<EdnValue> = list.get(1..).unwrap_or_default().to_vec();
@@ -329,7 +345,8 @@ impl RecursiveEvaluator {
     /// Result: Fact(alice_uuid, ":reachable", Ref(bob_uuid))
     fn instantiate_head(&self, head: &[EdnValue], binding: &Bindings) -> Result<Fact> {
         if head.len() < 2 {
-            return Err(anyhow!(
+            return Err(err_coded!(
+                ErrorCode::Int022,
                 "Rule head must have at least 2 elements: (predicate ?arg1)"
             ));
         }
@@ -337,24 +354,31 @@ impl RecursiveEvaluator {
         // head[0] is predicate name
         let predicate = match head.first() {
             Some(EdnValue::Symbol(s)) => s.clone(),
-            _ => return Err(anyhow!("Rule head must start with predicate name (symbol)")),
+            _ => {
+                return Err(err_coded!(
+                    ErrorCode::Int022,
+                    "Rule head must start with predicate name (symbol)"
+                ));
+            }
         };
 
         // head[1] is entity (usually a variable)
         let head_1 = head
             .get(1)
-            .ok_or_else(|| anyhow!("Rule head missing entity argument"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Int022, "Rule head missing entity argument"))?;
         let entity_edn = self.substitute_variable(head_1, binding)?;
         let entity = edn_to_entity_id(&entity_edn)
-            .map_err(|e| anyhow!("Failed to convert entity: {}", e))?;
+            .map_err(|e| err_coded!(ErrorCode::Int022, format!("Failed to convert entity: {e}")))?;
 
         let value = if head.len() >= 3 {
             // 2-arg head: (reachable ?from ?to) — value is head[2]
             let head_2 = head
                 .get(2)
-                .ok_or_else(|| anyhow!("Rule head missing value argument"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int022, "Rule head missing value argument"))?;
             let value_edn = self.substitute_variable(head_2, binding)?;
-            edn_to_value(&value_edn).map_err(|e| anyhow!("Failed to convert value: {}", e))?
+            edn_to_value(&value_edn).map_err(|e| {
+                err_coded!(ErrorCode::Int022, format!("Failed to convert value: {e}"))
+            })?
         } else {
             // 1-arg head: (blocked ?x) — store a Boolean(true) sentinel
             crate::graph::types::Value::Boolean(true)
@@ -377,7 +401,10 @@ impl RecursiveEvaluator {
                     // Convert Value back to EdnValue for entity/value conversion
                     Ok(value_to_edn(value))
                 } else {
-                    Err(anyhow!("Unbound variable in rule head: {}", s))
+                    Err(err_coded!(
+                        ErrorCode::Int022,
+                        format!("Unbound variable in rule head: {s}")
+                    ))
                 }
             }
             _ => Ok(edn.clone()), // Not a variable, use as-is
@@ -438,7 +465,9 @@ pub(crate) fn rule_invocation_to_pattern(predicate: &str, args: &[EdnValue]) -> 
     match args.len() {
         1 => {
             // Safety: length checked above
-            let arg0 = args.first().ok_or_else(|| anyhow!("missing arg 0"))?;
+            let arg0 = args
+                .first()
+                .ok_or_else(|| err_coded!(ErrorCode::Int022, "missing arg 0"))?;
             Ok(Pattern::new(
                 arg0.clone(),
                 EdnValue::Keyword(format!(":{}", predicate)),
@@ -446,19 +475,19 @@ pub(crate) fn rule_invocation_to_pattern(predicate: &str, args: &[EdnValue]) -> 
             ))
         }
         2 => {
-            let arg0 = args.first().ok_or_else(|| anyhow!("missing arg 0"))?;
-            let arg1 = args.get(1).ok_or_else(|| anyhow!("missing arg 1"))?;
+            let arg0 = args
+                .first()
+                .ok_or_else(|| err_coded!(ErrorCode::Int022, "missing arg 0"))?;
+            let arg1 = args
+                .get(1)
+                .ok_or_else(|| err_coded!(ErrorCode::Int022, "missing arg 1"))?;
             Ok(Pattern::new(
                 arg0.clone(),
                 EdnValue::Keyword(format!(":{}", predicate)),
                 arg1.clone(),
             ))
         }
-        n => Err(anyhow!(
-            "Rule invocation '{}' must have 1 or 2 arguments, got {}",
-            predicate,
-            n
-        )),
+        n => Err(err_coded!(ErrorCode::Int028, predicate, n)),
     }
 }
 
@@ -623,7 +652,7 @@ impl StratifiedEvaluator {
             while i < all_preds.len() {
                 let pred = all_preds
                     .get(i)
-                    .ok_or_else(|| anyhow!("index out of bounds"))?
+                    .ok_or_else(|| err_coded!(ErrorCode::Int022, "index out of bounds"))?
                     .clone();
                 for rule in registry.get_rules(&pred) {
                     for clause in &rule.body {
@@ -1102,29 +1131,16 @@ mod tests {
         );
         let result = evaluator.evaluate_recursive_rules(&["reachable".to_string()]);
         let code = expect_err_code(result);
-        // No QRY-0xx code is documented in ERROR_REFERENCE.md for the
-        // recursion/depth-limit family ("Max iterations exceeded", "Max
-        // derived facts exceeded", "Max query results exceeded") — the 9
-        // documented QRY codes cover transact/retract validation, unknown
-        // predicates, and function/rule registry lock poisoning only. This
-        // is a live, public-API-reachable error path (a query over a
-        // non-terminating recursive rule with a low `max_derived_facts`/
-        // `max_results`, or — as constructed directly here — a pathological
-        // `max_iterations`), currently falling through to the generic
-        // INT-000 catch-all by design (see src/error.rs's `MinigrafError::from`
-        // fallback). Locking in today's code here so this is a deliberate,
-        // documented gap rather than a silent one; assigning it a real code
-        // is candidate follow-up work for the API+INT category PR (#277
-        // step 6), which audits every leftover uncoded call site crate-wide.
-        assert_eq!(code, "INT-000");
+        // #277 step 6 (API+INT category PR) assigned this recursion/depth-limit
+        // family ("Max iterations exceeded", "Max derived facts exceeded", "Max
+        // query results exceeded") a shared INT-020 code — see ERROR_REFERENCE.md.
+        assert_eq!(code, "INT-020");
     }
 
     #[test]
-    fn test_max_derived_facts_exceeded_returns_int000() {
+    fn test_max_derived_facts_exceeded_returns_int020() {
         // Same rationale as test_max_iterations_exceeded_returns_error above:
-        // "Max derived facts per iteration exceeded" has no documented QRY
-        // code, so it currently — and, for this PR, deliberately — surfaces
-        // as INT-000.
+        // "Max derived facts per iteration exceeded" shares INT-020.
         let storage = create_test_storage();
         let rules = Arc::new(RwLock::new(RuleRegistry::new()));
         register_test_rule(&rules, r#"(rule [(reachable ?x ?y) [?x :connected ?y]])"#);
@@ -1139,7 +1155,7 @@ mod tests {
             RecursiveEvaluator::new(storage, rules, functions, 1000, 0, DEFAULT_MAX_RESULTS);
         let result = evaluator.evaluate_recursive_rules(&["reachable".to_string()]);
         let code = expect_err_code(result);
-        assert_eq!(code, "INT-000");
+        assert_eq!(code, "INT-020");
     }
 
     #[test]
