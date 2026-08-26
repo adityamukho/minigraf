@@ -97,7 +97,7 @@ fn write_blob(blob: &[u8], backend: &mut dyn StorageBackend, start_page_id: u64)
                 .min(offset.checked_add(DATA_BYTES_PER_PAGE).ok_or_else(|| {
                     err_coded!(
                         ErrorCode::Int048,
-                        format!("btree write_blob: end offset overflow")
+                        "btree write_blob: end offset overflow".to_string()
                     )
                 })?);
             blob.get(offset..end).ok_or_else(|| {
@@ -122,14 +122,14 @@ fn write_blob(blob: &[u8], backend: &mut dyn StorageBackend, start_page_id: u64)
         *page.get_mut(0).ok_or_else(|| {
             err_coded!(
                 ErrorCode::Int049,
-                format!("btree: page index 0 out of bounds")
+                "btree: page index 0 out of bounds".to_string()
             )
         })? = PAGE_TYPE_INDEX;
         page.get_mut(1..5)
             .ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int049,
-                    format!("btree: page slice 1..5 out of bounds")
+                    "btree: page slice 1..5 out of bounds".to_string()
                 )
             })?
             .copy_from_slice(&total_len.to_le_bytes());
@@ -137,21 +137,21 @@ fn write_blob(blob: &[u8], backend: &mut dyn StorageBackend, start_page_id: u64)
             .ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int049,
-                    format!("btree: page slice 5..9 out of bounds")
+                    "btree: page slice 5..9 out of bounds".to_string()
                 )
             })?
             .copy_from_slice(&chunk_len.to_le_bytes());
         *page.get_mut(9).ok_or_else(|| {
             err_coded!(
                 ErrorCode::Int049,
-                format!("btree: page index 9 out of bounds")
+                "btree: page index 9 out of bounds".to_string()
             )
         })? = is_last;
         if !chunk.is_empty() {
             let end = PAGE_HEADER_SIZE.checked_add(chunk.len()).ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int048,
-                    format!("btree write_blob: data end overflow")
+                    "btree write_blob: data end overflow".to_string()
                 )
             })?;
             page.get_mut(PAGE_HEADER_SIZE..end)
@@ -174,7 +174,7 @@ fn write_blob(blob: &[u8], backend: &mut dyn StorageBackend, start_page_id: u64)
             start_page_id.checked_add(page_offset).ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int048,
-                    format!("btree write_blob: page_id overflow")
+                    "btree write_blob: page_id overflow".to_string()
                 )
             })?,
             &page,
@@ -191,7 +191,7 @@ fn write_blob(blob: &[u8], backend: &mut dyn StorageBackend, start_page_id: u64)
     start_page_id.checked_add(num_pages_u64).ok_or_else(|| {
         err_coded!(
             ErrorCode::Int048,
-            format!("btree write_blob: final page_id overflow")
+            "btree write_blob: final page_id overflow".to_string()
         )
     })
 }
@@ -202,7 +202,7 @@ fn read_blob(backend: &dyn StorageBackend, start_page_id: u64) -> Result<Vec<u8>
     let first_byte = *first_page.first().ok_or_else(|| {
         err_coded!(
             ErrorCode::Int049,
-            format!("btree read_blob: first_page index 0 out of bounds")
+            "btree read_blob: first_page index 0 out of bounds".to_string()
         )
     })?;
     if first_byte != PAGE_TYPE_INDEX {
@@ -221,14 +221,14 @@ fn read_blob(backend: &dyn StorageBackend, start_page_id: u64) -> Result<Vec<u8>
             .ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int049,
-                    format!("btree read_blob: first_page slice 1..5 out of bounds")
+                    "btree read_blob: first_page slice 1..5 out of bounds".to_string()
                 )
             })?
             .try_into()
             .map_err(|_| {
                 err_coded!(
                     ErrorCode::Int049,
-                    format!("btree read_blob: slice 1..5 not exactly 4 bytes")
+                    "btree read_blob: slice 1..5 not exactly 4 bytes".to_string()
                 )
             })?,
     ) as usize;
@@ -258,7 +258,7 @@ fn read_blob(backend: &dyn StorageBackend, start_page_id: u64) -> Result<Vec<u8>
                 .map_err(|_| {
                     err_coded!(
                         ErrorCode::Int049,
-                        format!("btree read_blob: slice 5..9 not exactly 4 bytes")
+                        "btree read_blob: slice 5..9 not exactly 4 bytes".to_string()
                     )
                 })?,
         ) as usize;
@@ -290,7 +290,7 @@ fn read_blob(backend: &dyn StorageBackend, start_page_id: u64) -> Result<Vec<u8>
         page_id = page_id.checked_add(1).ok_or_else(|| {
             err_coded!(
                 ErrorCode::Int048,
-                format!("btree read_blob: page_id overflow")
+                "btree read_blob: page_id overflow".to_string()
             )
         })?;
     }

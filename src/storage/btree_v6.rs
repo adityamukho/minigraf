@@ -141,7 +141,7 @@ fn write_internal_page(
     })?;
     let rightmost_child = *child_ids
         .last()
-        .ok_or_else(|| err_coded!(ErrorCode::Int049, format!("child_ids is empty")))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int049, "child_ids is empty".to_string()))?;
 
     let mut page = vec![0u8; PAGE_SIZE];
 
@@ -245,7 +245,7 @@ pub fn build_btree(
             let first_key = cur_first_key.take().ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int049,
-                    format!("BUG: cur_first_key empty when writing leaf page")
+                    "BUG: cur_first_key empty when writing leaf page".to_string()
                 )
             })?;
             leaf_infos.push((next_page, first_key));
@@ -273,7 +273,7 @@ pub fn build_btree(
         let first_key = cur_first_key.take().ok_or_else(|| {
             err_coded!(
                 ErrorCode::Int049,
-                format!("BUG: cur_first_key empty when flushing last leaf page")
+                "BUG: cur_first_key empty when flushing last leaf page".to_string()
             )
         })?;
         leaf_infos.push((next_page, first_key));
@@ -302,7 +302,7 @@ pub fn build_btree(
             .ok_or_else(|| {
                 err_coded!(
                     ErrorCode::Int049,
-                    format!("page too small to write next_leaf")
+                    "page too small to write next_leaf".to_string()
                 )
             })?
             .copy_from_slice(&next_lid.to_le_bytes());
@@ -316,7 +316,7 @@ pub fn build_btree(
             leaf_infos
                 .first()
                 .ok_or_else(|| {
-                    err_coded!(ErrorCode::Int049, format!("leaf_infos unexpectedly empty"))
+                    err_coded!(ErrorCode::Int049, "leaf_infos unexpectedly empty".to_string())
                 })?
                 .0,
             next_page,
@@ -334,7 +334,7 @@ pub fn build_btree(
                     .ok_or_else(|| {
                         err_coded!(
                             ErrorCode::Int049,
-                            format!("current_level unexpectedly empty")
+                            "current_level unexpectedly empty".to_string()
                         )
                     })?
                     .0,
