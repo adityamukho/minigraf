@@ -1608,18 +1608,23 @@ Push `Expr` predicate clauses (e.g. `[(> ?age 30)]`) down to filter bindings as 
 **Stability Promise**: After v1.0.0, we commit to:
 - Backwards-compatible file format (decades)
 - Stable public API (semantic versioning)
-- Built-in auto-migration on open (v7 is the baseline; v1–v6 migration dropped in v2.0)
+- Built-in auto-migration on open (v7 is the baseline; v1–v6 migration dropped in v3.0.0)
 - Long-term support
 
-### v2.0 — File Format Policy
+### v3.0.0 — File Format Policy
 
-**v2.0 supports file format v7 only.** Support for v1–v6 is dropped. The v1–v6 → v7 auto-migration code in `persistent_facts.rs` can be removed when cutting 2.0. Any database that was opened at least once under a v1.x release will already be on v7; there are no known users on older formats.
+**v3.0.0 supports file format v8 only** (fixing #287's `EavtKey`/`AevtKey` missing-value-bytes data loss bug bumps the format v7→v8). Support for v1–v6 is dropped at the same time. The v1–v6 → v7 auto-migration code in `persistent_facts.rs` can be removed when cutting this release; a v7→v8 migration replaces it. Any database that was opened at least once under a v1.x release will already be on v7; there are no known users on older formats.
 
-v2.0 scope (GitHub milestone "2.0"):
+This was the GitHub milestone named "2.0" before the v2.0.0 release above claimed that version number for the kernel-locking/structured-error-codes breaking changes — renumbered to v3.0.0 accordingly.
+
+v3.0.0 scope (GitHub milestone "v3.0.0", formerly "2.0"):
+- `EavtKey`/`AevtKey` missing-value-bytes fix, file format v7→v8 (#287)
 - `lag`/`lead` window functions (#182)
-- Sliding row frames — `:rows N preceding` (#183)
+- Sliding row frames — `:rows N preceding` (#183, builds on #182)
 - PreparedQuery over UniFFI (#181)
 - UDF registration over UniFFI (#180)
+- `OpenOptions` exposed over UniFFI, so an embedder can suppress the close-time checkpoint (#322)
+- Temporal graph traversal research (#273 — may resolve as docs/blog rather than code)
 
 ---
 
@@ -1683,8 +1688,9 @@ When evaluating features, ask:
 - ✅ Performance improvements: Complete (May 2026) — hash-join cluster + selective B+Tree lookup (#202, #203, #204, #208), 850 tests
 - ✅ Optimizer & Benchmarks: Complete (May 2026) — predicate push-down (#207, #206), cost-based not/or ordering (#205), SIMD crossover analysis (#229), 850 tests
 - ✅ Reliability hardening: Complete (May 2026) — WAL fault injection, migration matrix, index corruption resilience, property-based testing, coverage gates, long-haul smoke, XTDB/Datomic compat (#209, #210, #212, #213, #214, #215, #216, #217, #219, #220, #221), 962 tests
-- ✅ Deferred features tagged: Complete (May 2026) — #182, #183, #180, #181 tagged milestone 2.0; #187 closed (no pre-1.0 users); #201 deferred to 2.0
+- ✅ Deferred features tagged: Complete (May 2026) — #182, #183, #180, #181 tagged milestone v3.0.0 (formerly "2.0"); #187 closed (no pre-1.0 users); #201 deferred to v2.x (exploratory, demand-gated)
 - ✅ Documentation: Complete (May 2026) — cookbook (#190), perf tuning guide (#191), error message guide (#192)
+- ✅ v2.0.0: Complete (August 2026) — kernel file locking (#317, #304), structured error codes (#277), MSRV 1.89, `OpenOptions` `#[non_exhaustive]`, 1153 tests
 - 🎯 Phase 9: Ongoing (Ecosystem — tracked in `minigraf-examples` repo; developer tools in `minigraf-inspector` and `minigraf-visualizer`)
 
 **Note**: This is a solo-maintained project. Timeline is flexible but realistic.
@@ -1693,24 +1699,24 @@ When evaluating features, ask:
 
 ## Current Focus
 
-**Current release**: v1.2.3 (August 2026) — no core changes; cut so the bindings can republish with the `minigraf-node` `close()` fix that v1.2.2's handle exclusion made necessary
+**Current release**: v2.0.0 (August 2026) — kernel file locking, structured error codes, and the accumulated breaking changes below
 
 **Completed**:
 - ✅ Phase 8 / v1.0.0: Cross-platform release (WASM, WASI, Mobile, Python, Java, C FFI, Node.js)
 - ✅ Performance — hash-join, selective B+Tree lookup (#202–#204, #208)
 - ✅ Optimizer & Benchmarks — predicate push-down, cost-based ordering, SIMD analysis (#205–#207, #229)
 - ✅ Reliability — WAL fault injection, migration matrix, index corruption resilience, XTDB/Datomic compat, coverage gates (#209, #210, #212–#217, #219–#221)
-- ✅ Deferred Features — #180, #181, #182, #183 tagged milestone 2.0; #187 closed; #201 deferred to 2.0
+- ✅ Deferred Features — #180, #181, #182, #183 tagged milestone v3.0.0 (formerly "2.0"); #187 closed; #201 deferred to v2.x (exploratory)
 - ✅ #231 Repo Split — Python, Node, WASM, Java, Android, Swift, C all in separate repos under [project-minigraf](https://github.com/project-minigraf)
 - ✅ Documentation — cookbook (#190), perf tuning guide (#191), error message guide (#192)
 - ✅ v1.2.0 — Magic Sets rewriting (#289), per-query `:max-derived-facts`/`:max-results` limits (#288), bug fixes (#272, #283, #285), perf improvements (#279, #281)
 - ✅ v1.2.1 — Magic sets `fb` adornment fix: sentinel entity + 2-arg guard preserves keyword type through value-position binding (#297, #298)
 - ✅ v1.2.3 — Core unchanged; cut to carry `minigraf-node`'s new `close()` (project-minigraf/minigraf-node#1), needed because v1.2.2's handle exclusion left GC'd hosts with no way to release a handle
 - ✅ v1.2.2 — `FileLock::acquire` no longer treats a lock held by our own PID as stale, which had allowed two handles on one file per process with divergent page tables — the source of the intermittent `Page N out of bounds` (#304); ordering predicates compare strings lexicographically (#312)
-- 🚧 Unreleased — Kernel file locking replaces the PID sidecar (#317, #304). A PID is not a liveness token: it is not unique across PID namespaces and is recycled within one, so a container killed with SIGKILL left `.graph.lock` holding `1` and the replacement container — also PID 1 — read its own PID back and refused to open, permanently. `std::fs::File::try_lock` moves liveness to the kernel, which releases on process death however it occurs; because `flock`/OFD locks attach to the open file description, a second open within one process is refused too, so v1.2.2's fix for #304 is preserved without any PID bookkeeping. The sidecar is gone. MSRV moves 1.85 → 1.89. Nightly NFS and Docker lock suites deferred to #324
+- ✅ v2.0.0 — Kernel file locking replaces the PID sidecar (#317, #304). A PID is not a liveness token: it is not unique across PID namespaces and is recycled within one, so a container killed with SIGKILL left `.graph.lock` holding `1` and the replacement container — also PID 1 — read its own PID back and refused to open, permanently. `std::fs::File::try_lock` moves liveness to the kernel, which releases on process death however it occurs; because `flock`/OFD locks attach to the open file description, a second open within one process is refused too, so v1.2.2's fix for #304 is preserved without any PID bookkeeping. The sidecar is gone. MSRV moves 1.85 → 1.89. Nightly NFS and Docker lock suites landed (#324, plus follow-ups #345/#347/#348). Also in this release: correctness fixes #308 (SIGKILL header corruption), #303/#305 (parser trailing-input bugs), #302 (WAL fdatasync + `SyncMode`), #248/#250 (not/or pushdown + short-circuit), #274/#275 (page-cache skip); structured runtime error codes (#277, 186 `ErrorCode` variants, 6-PR rollout); `OpenOptions` marked `#[non_exhaustive]`. Bundled as a major version because of the accumulated breaking changes — see CHANGELOG for the full list. #309 (lock fairness) closed as by-design, not implemented.
 
 **Transferred to other repos**:
-- Developer tools: `minigraf-inspector` (#184), `minigraf-visualizer` (#186); #185 (query profiler) deferred to 2.0
+- Developer tools: `minigraf-inspector` (#184), `minigraf-visualizer` (#186); #185 (query profiler) is milestone v2.1.0
 - Ecosystem libraries (#196–#200) and integration examples (#193–#195): `minigraf-examples`
 
 **Ecosystem work**: Tracked in [`minigraf-examples`](https://github.com/project-minigraf/minigraf-examples)
@@ -1724,10 +1730,11 @@ When evaluating features, ask:
 - ✅ Packed pages over one-per-page (philosophy: small binary, efficient storage)
 - ✅ Approximate LRU (read-lock on hits — avoids write-lock contention)
 - ✅ Phase 8 = v1.0.0 (cross-platform completion is the 1.0 milestone)
-- ✅ v2.0 = v7-only file format; migration code for v1–v6 dropped
+- ✅ Accumulated breaking changes (kernel locking, structured error codes, `OpenOptions` non-exhaustive) shipped as v2.0.0, a strict-semver major bump, rather than folded into a "v1.3.0" minor
+- ✅ v3.0.0 = v8-only file format (v7 support dropped alongside the v7→v8 migration for #287); formerly the untitled "2.0" milestone, renumbered when v2.0.0 claimed that version for the release above
 
 See [GitHub Issues](https://github.com/project-minigraf/minigraf/issues) for specific tasks.
 
 ---
 
-**Last Updated**: August 2026 — v1.2.3 released (core unchanged; carries the minigraf-node `close()` fix). Kernel file locking (#317, #304) is merged but unreleased; its release version is deliberately undecided, see the CHANGELOG's breaking-changes section. Next up is v1.3.0 (performance + structured errors: #274, #275, #248, #250, #277)
+**Last Updated**: August 2026 — v2.0.0 released: kernel file locking (#317, #304), structured runtime error codes (#277), `OpenOptions` `#[non_exhaustive]`, MSRV 1.89 — see CHANGELOG for the full breaking-changes list. Milestones renumbered accordingly: v1.4.0→v2.1.0 (rule persistence + profiler), v1.5.0→v2.2.0 (query ergonomics), v1.6.0→v2.3.0 (storage/query perf), old "2.0"→v3.0.0 (format v8 + window completeness + FFI expansion). v2.1.0 is next.

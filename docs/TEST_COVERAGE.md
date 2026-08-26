@@ -1,17 +1,20 @@
 # Minigraf Test Coverage Report
 
-**Last Updated**: v1.2.3 (August 2026) + Unreleased kernel file locking work, 1023 tests ✅
+**Last Updated**: v2.0.0 (August 2026), 1153 tests ✅
 
 ## Test Summary
 
-**Total Tests**: 1023 ✅ (1015 passing, 8 ignored)
-- ✅ 678 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, kernel file lock same-process exclusion and unsupported-filesystem classification #304 #317, parser recursion depth bound #326, non-UTF-8-boundary temporal input #325)
+**Total Tests**: 1153 ✅ (1145 passing, 8 ignored)
+- ✅ 756 unit tests (lib — includes Wave 1 hash-join and selective-lookup test modules, Wave 3 fault-injection unit tests, per-query limits #288, magic sets #289, kernel file lock same-process exclusion and unsupported-filesystem classification #304 #317, parser recursion depth bound #326, non-UTF-8-boundary temporal input #325, structured error codes #277 — `MinigrafError`/`ErrorCategory` plumbing, `bail_coded!`/`err_coded!` macros, `REGISTRY`↔`ERROR_REFERENCE.md` bidirectional sync test, not/not-join pushdown #248, or/or-join short-circuit #250, WAL fdatasync + `SyncMode` #302)
 - ✅ 12 bi-temporal tests (integration)
 - ✅ 11 complex query tests (integration)
 - ✅ 9 recursive rules tests (integration)
 - ✅ 12 concurrency tests (integration, 1 ignored: nightly stress)
 - ✅ 22 WAL / crash recovery tests (integration)
+- ✅ 2 crash-kill tests (integration, #308 — SIGKILL during an active `transact` no longer permanently corrupts the header)
 - ✅ 2 PID namespace tests (integration, #317 — kernel lock survives a holder killed at PID 1 in another namespace; skips rather than fails where `unshare` is unavailable)
+- ✅ 6 NFS lock tests (integration, nightly, #324 — flock/OFD behaviour over NFSv4, including the lock-warm-up fix from #348)
+- ✅ 2 Docker lock tests (integration, nightly, #324 — container-restart liveness semantics)
 - ✅ 2 cross-platform compat tests (integration, Phase 8.1)
 - ✅ 6 index tests (integration, Phase 6.1)
 - ✅ 7 performance tests (integration, Phase 6.2/6.4b)
@@ -22,7 +25,7 @@
 - ✅ 14 not-join tests (integration, Phase 7.1b)
 - ✅ 24 aggregation tests (integration, Phase 7.2a)
 - ✅ 32 predicate expression tests (integration, Phase 7.2b — includes lexicographic string ordering #312)
-- ✅ 18 disjunction tests (integration, Phase 7.3)
+- ✅ 23 disjunction tests (integration, Phase 7.3 + #250 or/or-join short-circuit)
 - ✅ 8 production pattern tests (integration, Phase 7.5 — cross-feature scenarios)
 - ✅ 8 error handling tests (integration, Phase 7.5 — error-path coverage)
 - ✅ 22 temporal metadata tests (integration, Phase 7.6 — `:db/valid-from`, `:db/valid-to`, `:db/tx-count`, `:db/tx-id`, `:db/valid-at`)
@@ -37,9 +40,14 @@
 - ✅ 14 XTDB compat tests (integration, Wave 3 #221 — Apache 2.0 semantic ports of XTDB concepts)
 - ✅ 11 Datomic compat tests (integration, Wave 3 #221 — independently written semantic ports of Datomic concepts)
 - ✅ 7 magic sets tests (integration, #289 — demand-driven recursive evaluation correctness: bound transitive closure, all-free closure, subset invariant, multi-hop, mutual recursion)
+- ✅ 8 error-code foundation tests (integration, #277 foundation PR #357 — `MinigrafError`/`ErrorCategory` boundary conversion, INT-000 fallback)
+- ✅ 16 PRS-0xx error-code tests (integration, #277/#358 — parser structured codes, largest category)
+- ✅ 4 QRY-0xx error-code tests (integration, #277/#361 — query executor structured codes)
+- ✅ 6 STG-0xx error-code tests (integration, #277/#359 — storage/file-format structured codes)
+- ✅ 3 WAL-0xx error-code tests (integration, #277/#360 — WAL structured codes)
 - ✅ 15 doc tests (9 passing, 6 ignored: doc examples referencing internal types that cannot compile as standalone rustdoc tests)
 
-**Status**: ✅ **All 1015 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
+**Status**: ✅ **All 1145 tests passing** (8 ignored: 6 internal-type doc examples, 1 nightly concurrency stress, 1 nightly smoke)
 
 ## v1.2.2 Completion Status: ✅ COMPLETE
 
@@ -49,6 +57,19 @@
 - ✅ `src/storage/backend/file.rs` — lock unit tests: same-process second open refused (#304), cross-process `WouldBlock` retried then failed within budget, sequential reopen-after-drop, leftover v1.2.x sidecar ignored and preserved, path registry not corrupted by a refused open, plus 4 `classify` tests covering the unsupported-filesystem branch in both `allow_unlocked` settings
 - ✅ `tests/predicate_expr_test.rs` — string ordering via `<`, `>`, `<=`, `>=`; mixed-type and NaN behaviour pinned
 - ✅ Crash simulation uses a real child process that `abort()`s (`run_crashing_child`), replacing the former `mem::forget` idiom. `mem::forget` leaks the `File`, so the kernel lock stays held for the life of the test process; only real process death releases it, which is also what production does.
+
+---
+
+## v2.0.0 Completion Status: ✅ COMPLETE
+
+**v2.0.0 issues**: #317/#304 (kernel file locking replaces the PID sidecar), #324 (nightly NFS + Docker lock suites, plus follow-ups #345/#347/#348), #308 (SIGKILL header/WAL corruption), #303 (`:valid-at` parser trailing-options-map bug), #305 (parser trailing-input bug), #302 (WAL fdatasync + `SyncMode`), #248/#250 (not/not-join pushdown, or/or-join short-circuit), #274/#275 (page-cache skip for in-memory/WASM), #352 (`ERROR_REFERENCE.md` entries for #303/#305), #277 (structured error codes, 6-PR rollout: foundation #357, WAL #360/#363, QRY #361/#364, STG #359/#365, PRS #358/#366, API+INT #362/#368), plus the `OpenOptions` `#[non_exhaustive]` change bundled into this release. #309 (lock fairness under heavy contention) was closed as by-design, not implemented — see `docs/ERROR_REFERENCE.md` STG-026.
+
+**New tests added since v1.2.3** (+130: 78 unit, 5 disjunction, 47 across 8 new integration test files):
+- ✅ `tests/crash_kill_test.rs` (2, #308) — real SIGKILL of a child process mid-`transact`, verifying the header survives
+- ✅ `tests/pid_namespace_test.rs`, `tests/nfs_lock_test.rs` (6), `tests/docker_lock_test.rs` (2) — kernel-lock liveness across PID namespaces, NFSv4, and container restarts (#317/#324; nightly)
+- ✅ `tests/error_codes_foundation_test.rs` (8), `tests/error_codes_prs_test.rs` (16), `tests/error_codes_qry_test.rs` (4), `tests/error_codes_storage_test.rs` (6), `tests/error_codes_wal_test.rs` (3) — structured error code coverage for #277, one file per category PR
+- ✅ `tests/disjunction_test.rs` — 5 new tests for `or`/`or-join` short-circuit evaluation (#250)
+- ✅ Unit tests (lib, +78) — `not`/`not-join` pushdown (#248), WAL `SyncMode`/fdatasync (#302), parser trailing-input rejection (#303/#305), the `REGISTRY`↔`ERROR_REFERENCE.md` bidirectional sync test and per-code regression tests for all 186 `ErrorCode` variants (#277)
 
 ---
 
@@ -884,11 +905,10 @@ summaries.
 ## What's Not Tested Yet ⏳
 
 ### Roadmap (not yet implemented)
-- ⏳ `lag` / `lead` window functions — v2.0 (#182); currently rejected at parse time
-- ⏳ Sliding row frames (`:rows N preceding`) — v2.0 (#183)
-- ⏳ Structured runtime error codes — v1.3.0 (#277)
-- ⏳ Rule persistence across sessions — v1.4.0 (#241)
-- ⏳ Query profiler — v1.4.0 (#185)
+- ⏳ `lag` / `lead` window functions — v3.0.0 (#182); currently rejected at parse time
+- ⏳ Sliding row frames (`:rows N preceding`) — v3.0.0 (#183)
+- ⏳ Rule persistence across sessions — v2.1.0 (#241)
+- ⏳ Query profiler — v2.1.0 (#185)
 
 Every Phase 7.3–7.9 item previously listed here (disjunction, optimizer work for new
 clause types, prepared statements, temporal pseudo-attributes) has since shipped and is
@@ -911,12 +931,16 @@ cargo test
 cargo test --quiet
 
 # Run specific test suites
-cargo test --lib                       # Unit tests (663)
+cargo test --lib                       # Unit tests (756)
 cargo test --test bitemporal_test      # Bi-temporal (12)
 cargo test --test complex_queries_test # Complex queries (11)
 cargo test --test recursive_rules_test # Recursive rules (9)
 cargo test --test concurrency_test     # Concurrency (12, 1 ignored)
-cargo test --test wal_test             # WAL / crash recovery (21)
+cargo test --test wal_test             # WAL / crash recovery (22)
+cargo test --test crash_kill_test      # SIGKILL header/WAL crash-safety (2, #308)
+cargo test --test pid_namespace_test   # kernel lock across PID namespaces (2, #317)
+cargo test --test nfs_lock_test        # kernel lock over NFSv4 (6, nightly, #324)
+cargo test --test docker_lock_test     # kernel lock across container restarts (2, nightly, #324)
 cargo test --test index_test           # Covering indexes (6)
 cargo test --test performance_test     # Packed pages (7)
 cargo test --test retraction_test      # Retraction semantics (8)
@@ -924,7 +948,7 @@ cargo test --test edge_cases_test      # Edge cases (4)
 cargo test --test btree_v6_test        # B+tree v6 (8)
 cargo test --test negation_test        # stratified not (10)
 cargo test --test not_join_test        # not-join (14)
-cargo test --test disjunction_test     # or / or-join (18)
+cargo test --test disjunction_test     # or / or-join (23)
 cargo test --test aggregation_test     # aggregation (24)
 cargo test --test predicate_expr_test  # arithmetic & predicate expr (32)
 cargo test --test temporal_metadata_test # temporal pseudo-attributes (22)
@@ -933,6 +957,11 @@ cargo test --test udf_test             # user-defined functions (10)
 cargo test --test prepared_statements_test # prepared statements (17)
 cargo test --test production_patterns_test # cross-feature scenarios (8)
 cargo test --test error_handling_test      # error paths (8)
+cargo test --test error_codes_foundation_test # error codes: foundation (8, #277)
+cargo test --test error_codes_prs_test     # error codes: PRS-0xx (16, #277)
+cargo test --test error_codes_qry_test     # error codes: QRY-0xx (4, #277)
+cargo test --test error_codes_storage_test # error codes: STG-0xx (6, #277)
+cargo test --test error_codes_wal_test     # error codes: WAL-0xx (3, #277)
 cargo test --test grammar_conformance      # pest shadow grammar (3)
 cargo test --test magic_sets_test          # magic sets (7)
 cargo test --test migration_matrix_test    # migration matrix (5)
@@ -983,7 +1012,8 @@ cargo test -- --nocapture
 - XTDB compatibility verified: 14 semantic ports covering EAV, time travel, negation, rules, prepared queries (Wave 3)
 - Datomic compatibility verified: 11 independently written semantic ports covering datom model, tx-time, retraction, Datalog patterns (Wave 3)
 - Same-process handle exclusion verified: a second open on a live file is refused rather than silently granted, which is what produced the intermittent `Page N out of bounds` (v1.2.2, #304)
-- 1023 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat + kernel file locking (including browser WASM + WASI + cross-platform compat + fuzzing CI)
+- Structured error codes verified: 186 `ErrorCode` variants across PRS/QRY/STG/WAL/API/INT categories, `REGISTRY`↔`ERROR_REFERENCE.md` bidirectional sync test guarantees every documented code has a registry entry and vice versa (#277)
+- 1153 tests covering all Phase 3-8.1 features + Wave 3 reliability/compat + kernel file locking + structured error codes (including browser WASM + WASI + cross-platform compat + fuzzing CI)
 
 **Confidence Level**: ✅ **Production-ready for Wave 3 scope**
 

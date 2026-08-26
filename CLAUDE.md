@@ -167,14 +167,14 @@ Auto-migrates v1/v2/v3/v4/v5/v6 → v7 on open/checkpoint.
 
 ## Test Coverage
 
-**1023 tests passing** (1015 passing, 8 ignored; unit + integration + doc).
+**1153 tests passing** (1145 passing, 8 ignored; unit + integration + doc).
 See `docs/TEST_COVERAGE.md` for the full per-file breakdown.
 
 **Testing conventions** — see the Testing Conventions section below before writing any tests.
 
 ## Key Files for the Next Phase
 
-Phase 8 is complete — v1.0.0 released. Wave 3 Reliability is complete. #231 Repo Split is complete — Python, Node, WASM, Java, Android, Swift, and C bindings are all in separate repos under the project-minigraf org. Wave 8 Documentation is complete (#190, #191, #192). v1.2.0 released — magic sets rewriting (#289) and per-query limits (#288). Kernel file locking (#317, #304) is merged but unreleased: `std::fs::File::try_lock` on the `.graph` file replaced the `.graph.lock` PID sidecar, which bricked databases after any container restart. MSRV is now 1.89. The release version is deliberately undecided — see the CHANGELOG's breaking-changes section. Wave 5 (Query Profiler) is next.
+Phase 8 is complete — v1.0.0 released. Wave 3 Reliability is complete. #231 Repo Split is complete — Python, Node, WASM, Java, Android, Swift, and C bindings are all in separate repos under the project-minigraf org. Wave 8 Documentation is complete (#190, #191, #192). v1.2.0 released — magic sets rewriting (#289) and per-query limits (#288). **v2.0.0 released** — kernel file locking (#317, #304): `std::fs::File::try_lock` on the `.graph` file replaced the `.graph.lock` PID sidecar, which bricked databases after any container restart; structured runtime error codes (#277: 186 `ErrorCode` variants across PRS/QRY/STG/WAL/API/INT categories, `MinigrafError` replaces `anyhow::Result<T>` on the public API); `OpenOptions` is now `#[non_exhaustive]`; MSRV bumped to 1.89. Major version chosen deliberately — see the CHANGELOG's breaking-changes section for the full rationale. Wave 5 (Query Profiler, milestone v2.1.0) is next.
 
 Wave 5 relevant areas (see `ROADMAP.md` for full spec):
 - `src/query/datalog/` — query executor where profiling hooks will go (#185)

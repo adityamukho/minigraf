@@ -5,28 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v2.0.0 — 2026-08-26
+
+This was originally slated as v1.3.0, matching the GitHub milestone name under
+which most of this work was tracked. It ships as v2.0.0 instead: this
+project's CHANGELOG header (above) commits to Semantic Versioning, and under
+strict SemVer any backward-incompatible change to the public API past 1.0.0
+requires a major version bump, not a minor one. The breaking changes below —
+a public method return-type change, two `OpenOptions` struct-literal breaks
+plus `#[non_exhaustive]` closing that gap for good, Windows lock-semantics
+changes, and an MSRV bump — are exactly that. GitHub milestones v1.4.0,
+v1.5.0, v1.6.0, and the pre-existing untitled "2.0" (format v8 + window
+completeness + FFI expansion) were renumbered to v2.1.0, v2.2.0, v2.3.0, and
+v3.0.0 respectively to keep the sequence consistent.
 
 ### Breaking-ish changes
 
-- **Adding `OpenOptions::allow_unlocked` breaks struct-literal construction.**
-  `OpenOptions` has all-public fields and is not `#[non_exhaustive]`, so under
-  Rust's semver rules any downstream code building it as
+- **Adding `OpenOptions::allow_unlocked` broke struct-literal construction.**
+  At the time this field landed, `OpenOptions` had all-public fields and was
+  not `#[non_exhaustive]`, so under Rust's semver rules any downstream code
+  building it as
   `OpenOptions { wal_checkpoint_threshold: .., page_cache_size: .., .. }`
-  without `..Default::default()` no longer compiles. Callers who spread
-  `..Default::default()`, or who use the chainable builder methods, are
+  without `..Default::default()` no longer compiled. Callers who spread
+  `..Default::default()`, or who use the chainable builder methods, were
   unaffected. This branch had to update two such literals in its own tree —
   the `Default` impl itself and one test — and only the latter is a
   "downstream literal" in the sense that matters to a consumer.
 
-  Recorded here because the release decision is deliberately deferred, and
-  whoever makes it needs the facts: this is the **first post-1.0 field
-  addition** to `OpenOptions`. The earlier `max_derived_facts` and
-  `max_results` fields landed in v0.19.0, before 1.0, so they set no
-  precedent under the stability guarantee in PHILOSOPHY.md §7. Marking
-  `OpenOptions` `#[non_exhaustive]` would immunise every future field
-  addition, but is itself a breaking change, so it is a decision to make at
-  the same time as the version number rather than after it.
+  This was the **first post-1.0 field addition** to `OpenOptions`. The
+  earlier `max_derived_facts` and `max_results` fields landed in v0.19.0,
+  before 1.0, so they set no precedent under the stability guarantee in
+  PHILOSOPHY.md §7. Combined with the `synchronous` field below, it's why
+  `OpenOptions` is now `#[non_exhaustive]` — see that entry.
 - **`OpenOptions` gains a second post-1.0 field: `synchronous`** (#302). Same semver consequence as `allow_unlocked` above — a struct-literal `OpenOptions { .. }` built without `..Default::default()` no longer compiles. One in-tree literal (`src/db.rs`, a test) needed updating; every other in-tree construction already used the spread form or the chainable builder.
 - **`OpenOptions` is now `#[non_exhaustive]`.** This is a stronger break than the two field additions above: it disallows *any* struct-literal construction from outside this crate, including the `..Default::default()` spread form that made those additions non-breaking for spread-form callers. Construct via `OpenOptions::new()`/`OpenOptions::default()` plus the chainable builder methods instead. Landed alongside the `allow_unlocked`/`synchronous` fields specifically so this is the last time a new `OpenOptions` field forces a major-version bump. A new `wal_checkpoint_threshold(n)` builder method was added in the same change — the field had none before, which is why every in-tree construction site (tests, benches, one example) used a struct literal for it and had to be converted to the builder form.
 - **Minimum supported Rust version is now 1.89** (was effectively 1.85, implied

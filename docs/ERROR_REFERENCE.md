@@ -1958,11 +1958,11 @@ See the [file format section in README](../README.md#file-format) for version hi
 
 **Error text**: `Database is locked by another process ({}). The lock is held on the file itself and is released automatically when the holding process exits, so there is no lock file to clean up.`
 
-**Cause**: Another process holds the kernel file lock on this `.graph` file. Minigraf is single-writer: one process at a time. This is reported only after a bounded retry (up to ~375ms) rules out a transient `fork`-related false positive — see the Unreleased CHANGELOG entry on the bounded retry.
+**Cause**: Another process holds the kernel file lock on this `.graph` file. Minigraf is single-writer: one process at a time. This is reported only after a bounded retry (up to ~375ms) rules out a transient `fork`-related false positive — see the v2.0.0 CHANGELOG entry on the bounded retry.
 
 **Resolution**:
 - Wait for the other process to exit; the kernel releases the lock automatically, including when the process is killed.
-- There is no lock file to delete. If you find a stale `.graph.lock`, it is a leftover from a version before 1.3 and has no effect — it is not read or deleted, and should not be removed by hand in case an old process still depends on it.
+- There is no lock file to delete. If you find a stale `.graph.lock`, it is a leftover from a version before 2.0 and has no effect — it is not read or deleted, and should not be removed by hand in case an old process still depends on it.
 - If two services genuinely need the same file, put one in front of the other. Minigraf is embedded, not a server.
 
 **Scenario**: A rolling deployment starts the new pod before the old one has exited, and both mount the same volume.
