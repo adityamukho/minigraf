@@ -255,7 +255,7 @@ SQLite's success comes from a clear philosophy: be a library, not a server. Be s
 - Portable across platforms
 - Simple backup and versioning
 
-✅ **A reliable, ACID-compliant database** (Phase 5)
+✅ **A reliable, ACID-compliant database**
 - Transactions with rollback support
 - Crash recovery via WAL
 - Data integrity guarantees
@@ -425,44 +425,9 @@ The `.graph` file format must be:
 
 ## Evolution Strategy
 
-**Phase 1**: ✅ Prove the concept (COMPLETE)
-- Basic graph model, simple queries, in-memory storage
+Minigraf evolves conservatively: preserve the embedded, single-file model; prioritize correctness and compatibility; and keep optional capabilities outside the core where practical.
 
-**Phase 2**: ✅ Embeddability (COMPLETE)
-- Single-file storage, persistent graph database, embedded API
-
-**Phase 3**: ✅ Datalog Core (COMPLETE)
-- EAV data model, basic facts and queries, recursive rules, semi-naive evaluation
-
-**Phase 4**: ✅ Bi-temporal Support (COMPLETE - March 2026)
-- Transaction time (`tx_id`, `tx_count`) + valid time (`valid_from`, `valid_to`)
-- `:as-of` and `:valid-at` time travel queries, file format v2
-
-**Phase 5**: ✅ ACID + WAL (COMPLETE)
-- Write-ahead logging, transactions, crash recovery
-
-**Phase 6**: ✅ Performance (COMPLETE — March 2026)
-- Covering indexes (EAVT, AEVT, AVET, VAET), packed pages, LRU page cache, on-disk B+tree (file format v6), query optimizer
-
-**Phase 7**: 🎯 Datalog Completeness (next — 6-8 weeks)
-- Stratified negation (`not` / `not-join`), aggregation (`count`, `sum`, `min`, `max`), disjunction (`or` / `or-join`)
-- ≥90% branch coverage target
-
-**Phase 8**: 🎯 Cross-platform (3-4 months)
-- WASM (browser via wasm-pack + npm; server-side via WASI)
-- Mobile bindings (iOS `.xcframework`, Android `.aar` via UniFFI)
-- Language bindings (Python, JavaScript, C)
-
-**Phase 9**: 🎯 Ecosystem & Tooling (ongoing)
-- Developer tools: database inspector, query profiler, time travel visualizer
-- Documentation: Datalog language spec, cookbook, performance tuning guide
-- Integration examples: GraphRAG pattern, LangChain/LlamaIndex agent memory, annotated end-to-end scenarios
-- Ecosystem libraries: graph algorithms crate, schema validation, import/export, backup utilities
-- Exploratory: database branching (`db.branch()` → independent `.graph` fork for speculative writes, agent sandboxing, test isolation)
-
-**v1.0.0**: 9-12 months
-
-See ROADMAP.md for detailed feature breakdown.
+Completed release history is maintained in [CHANGELOG.md](CHANGELOG.md). Planned ecosystem work, exploratory ideas, and the v3.0.0 file-format policy are maintained in [ROADMAP.md](ROADMAP.md).
 ## When to Say "No"
 
 It's important to say "no" to preserve the project's focus:

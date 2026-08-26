@@ -377,7 +377,7 @@ Drop-in replacement for v1.1.x. No file-format changes, no public API breaking c
 
 ### Infrastructure
 
-- Split Java, Android, Swift, and C bindings into independent repos under `project-minigraf` org — completes #231 repo split (#231 phase 2)
+- Split Java, Android, Swift, and C bindings into independent repos under `project-minigraf` org — completes the #231 follow-up work.
   - `minigraf-java`: https://github.com/project-minigraf/minigraf-java
   - `minigraf-android`: https://github.com/project-minigraf/minigraf-android
   - `minigraf-swift`: https://github.com/project-minigraf/minigraf-swift
@@ -525,16 +525,16 @@ Four O(N²) query-engine bottlenecks eliminated. No API changes, no file-format 
 
 ---
 
-## v1.0.0 — Phase 8 Complete (2026-05-01)
+## v1.0.0 — Cross-Platform Release (2026-05-01)
 
 ### Milestone
 
 This is the **v1.0.0 release**. The public Rust API and the `.graph` file format are now stable
 and committed to semantic versioning. File format stability is guaranteed from this release.
 
-### Phase 8 summary
+### Cross-platform summary
 
-All Phase 8 cross-platform targets have shipped:
+All cross-platform targets have shipped:
 
 - **8.1a** — Browser WASM (`BrowserDb`, `IndexedDbBackend`, `@minigraf/browser` on npm) — v0.20.0
 - **8.1b** — Server-side WASM (`wasm32-wasip1` / WASI, Wasmtime/Wasmer CI) — v0.20.0
@@ -561,16 +561,16 @@ deferred to post-1.0 backlog).
 ## v0.25.0 — 2026-04-26
 
 ### Added
-- **Phase 8.3d**: Node.js bindings published to npm as `minigraf`.
+- **Node.js bindings** published to npm as `minigraf`.
   Install with `npm install minigraf`. No build step required — prebuilt
   `.node` binaries for Linux x86_64/aarch64, macOS universal2, Windows x86_64.
   API: `new MiniGrafDb(path)`, `MiniGrafDb.inMemory()`, `.execute(datalog)`,
   `.checkpoint()`. Full TypeScript definitions included.
 
-## v0.24.0 — Phase 8.3c: C Bindings (2026-04-26)
+## v0.24.0 — C Bindings (2026-04-26)
 
 ### Added
-- **Phase 8.3c**: C bindings distributed as GitHub Releases tarballs.
+- **C bindings** distributed as GitHub Releases tarballs.
   Download `minigraf-c-v0.24.0-<platform>.tar.gz` (Linux/macOS) or `.zip` (Windows)
   from the release page. Each archive contains the prebuilt shared library plus
   `minigraf.h`. API: `minigraf_open`, `minigraf_open_in_memory`, `minigraf_execute`,
@@ -586,10 +586,10 @@ deferred to post-1.0 backlog).
 
 795 tests.
 
-## v0.23.0 — Phase 8.3b: Java Desktop JVM Bindings (2026-04-25)
+## v0.23.0 — Java Desktop JVM Bindings (2026-04-25)
 
 ### Added
-- **Phase 8.3b**: Java desktop JVM bindings published to Maven Central as
+- **Java desktop JVM bindings** published to Maven Central as
   `io.github.adityamukho:minigraf-jvm:0.23.0`. Add to Gradle:
   `implementation("io.github.adityamukho:minigraf-jvm:0.23.0")`.
   Fat JAR with embedded natives for Linux x86_64/aarch64, macOS universal2,
@@ -606,10 +606,10 @@ deferred to post-1.0 backlog).
 
 795 tests.
 
-## v0.22.0 — Phase 8.3a: Python Bindings (2026-04-25)
+## v0.22.0 — Python Bindings (2026-04-25)
 
 ### Added
-- **Phase 8.3a**: Python bindings published to PyPI as `minigraf`.
+- **Python bindings** published to PyPI as `minigraf`.
   Install with `pip install minigraf`. API: `MiniGrafDb.open(path)`,
   `MiniGrafDb.open_in_memory()`, `.execute(datalog)`, `.checkpoint()`.
   Pre-built wheels for Linux x86_64/aarch64, macOS universal2, Windows x86_64.
@@ -618,12 +618,12 @@ deferred to post-1.0 backlog).
 
 ### Changed
 - `src/lib.rs`: added **Feature Flags** section and **WebAssembly targets** subsection to crate-level docs — browser feature, `wasm32-unknown-unknown` target switcher note, and WASI build command
-- `README.md`: updated "For Mobile Apps" section — replaced Phase 8 placeholder with current state, added Kotlin/Swift quick-start snippets and link to wiki integration guide
+- `README.md`: updated "For Mobile Apps" section — replaced the cross-platform placeholder with current state, added Kotlin/Swift quick-start snippets and link to wiki integration guide
 - Wiki `Use-Cases.md`: replaced Integration placeholder with full Android (Gradle setup, Kotlin API, error handling, threading) and iOS (SPM setup, Swift API, error handling, async) integration guides
 
 795 tests.
 
-## v0.21.0 — Phase 8.2: Android/iOS Mobile Bindings (2026-04-19)
+## v0.21.0 — Android/iOS Mobile Bindings (2026-04-19)
 
 ### Added
 - `minigraf-ffi` crate: UniFFI 0.31 bindings exposing `MiniGrafDb` (open, openInMemory, execute, checkpoint) and `MiniGrafError` (Parse, Query, Storage, Other) to Kotlin and Swift
@@ -646,16 +646,16 @@ deferred to post-1.0 backlog).
 ### Fixed
 - `browser` module now appears on docs.rs: added `docsrs` to the `cfg` gate and `doc(cfg(...))` badge annotation (`src/lib.rs`)
 
-## v0.20.0 — Phase 8.1: WebAssembly Support (2026-04-18)
+## v0.20.0 — WebAssembly Support (2026-04-18)
 
 ### Added
-- **Phase 8.1a** — Browser WASM (`wasm32-unknown-unknown` + `wasm-bindgen`):
+- **Browser WASM** (`wasm32-unknown-unknown` + `wasm-bindgen`):
   - `BrowserDb` public API: `open_in_memory()`, `execute()`, `checkpoint()`, `export_graph()`, `import_graph()`
   - `BrowserBufferBackend` — in-memory `StorageBackend` over a flat page buffer, identical byte layout to the native `.graph` format
   - `IndexedDbBackend` — page-granular IndexedDB storage (one 4 KB entry per page); only dirty pages written on checkpoint
   - `wasm-pack` build workflow (`wasm32-unknown-unknown --features browser`) generating `minigraf-wasm/` with JS glue and TypeScript definitions
   - `wasm-bindgen-test` browser integration tests (Chrome + Firefox via `wasm-pack test`)
-- **Phase 8.1b** — Server-side WASM (`wasm32-wasip1` / WASI):
+- **Server-side WASM** (`wasm32-wasip1` / WASI):
   - `FileBackend` verified under WASI's capability-based filesystem (no backend changes needed)
   - CI workflow (`wasm-wasi.yml`) builds, unit-tests, and smoke-tests under Wasmtime and Wasmer on every push/PR
   - Thread-dependent tests gated with `#[cfg(not(target_os = "wasi"))]`
@@ -668,7 +668,7 @@ deferred to post-1.0 backlog).
 
 795 tests.
 
-## v0.19.0 — Phase 7.9: Publish Prep (2026-04-08)
+## v0.19.0 — Publish Preparation (2026-04-08)
 
 ### Changed (breaking — internal visibility only)
 - `Minigraf::repl()` factory method replaces direct `Repl::new(FactStorage)` constructor — users call `db.repl().run()` instead
@@ -692,7 +692,7 @@ deferred to post-1.0 backlog).
 
 788 tests.
 
-## v0.18.0 — Phase 7.8: Prepared Statements (2026-04-04)
+## v0.18.0 — Prepared Statements (2026-04-04)
 
 ### Added
 - `Minigraf::prepare(query_str) -> Result<PreparedQuery>` — parse and plan a query once,
@@ -719,7 +719,7 @@ deferred to post-1.0 backlog).
 - `db.execute(str)` string API — no breaking change
 - Executor, optimizer, matcher — no changes required
 
-## v0.17.0 — Phase 7.7b: User-Defined Functions (2026-04-02)
+## v0.17.0 — User-Defined Functions (2026-04-02)
 
 ### Added
 - `Minigraf::register_aggregate(name, init, step, finalise)` — register a custom aggregate
@@ -739,7 +739,7 @@ deferred to post-1.0 backlog).
 
 ### Test count: 727 tests
 
-## v0.16.0 — Phase 7.7a: Window Functions (2026-04-02)
+## v0.16.0 — Window Functions (2026-04-02)
 
 ### Added
 - **Window functions** in Datalog `:find` clause: `(sum ?v :over (...))`, `(count ?v :over (...))`, `(min ?v :over (...))`, `(max ?v :over (...))`, `(avg ?v :over (...))`, `(rank :over (...))`, `(row-number :over (...))` with unbounded-preceding (cumulative from partition start to current row) frame
@@ -759,7 +759,7 @@ deferred to post-1.0 backlog).
 ### Total
 707 tests (unit + integration + doc)
 
-## v0.15.0 — Phase 7.6: Temporal Metadata Bindings (2026-04-01)
+## v0.15.0 — Temporal Metadata Bindings (2026-04-01)
 
 ### Added
 - **Temporal pseudo-attributes**: `:db/valid-from`, `:db/valid-to`, `:db/tx-count`, `:db/tx-id`, and `:db/valid-at` are now first-class bindable values in Datalog `:where` patterns
@@ -774,7 +774,7 @@ deferred to post-1.0 backlog).
 ### Total
 647 tests (438 unit + 209 integration)
 
-## v0.14.0 — Phase 7.5: Tests + Error Coverage (2026-03-31)
+## v0.14.0 — Tests + Error Coverage (2026-03-31)
 
 ### Added
 - `tests/production_patterns_test.rs`: 8 cross-feature integration tests combining not+as-of, not-join+count, count+not, count+valid-at, recursion+not, or+count, or+sum, count+as-of-sequence
@@ -891,8 +891,8 @@ deferred to post-1.0 backlog).
 - `evaluate_not_join` free function in `evaluator.rs`: builds partial binding from `join_vars`, converts `Pattern` and `RuleInvocation` body clauses to patterns, runs `PatternMatcher`; returns `true` if body is satisfiable (reject outer binding)
 - `rule_invocation_to_pattern` extracted as `pub(super)` free function from `RecursiveEvaluator`
 - Two not-post-filter sites in `executor.rs` now handle both `Not` and `NotJoin` via `evaluate_not_join`
-- `tests/negation_test.rs` — 10 integration tests for `not` (Phase 7.1a): basic absence, multi-clause, rule body, time-travel, negative cycle rejection
-- `tests/not_join_test.rs` — 14 integration tests for `not-join` (Phase 7.1b): basic exclusion, multiple join vars, multi-clause body, rule body, `:as-of`, `:valid-at`, negative cycle at registration, `not`+`not-join` coexistence, `RuleInvocation` in body end-to-end
+- `tests/negation_test.rs` — 10 integration tests for `not`: basic absence, multi-clause, rule body, time-travel, negative cycle rejection
+- `tests/not_join_test.rs` — 14 integration tests for `not-join`: basic exclusion, multiple join vars, multi-clause body, rule body, `:as-of`, `:valid-at`, negative cycle at registration, `not`+`not-join` coexistence, `RuleInvocation` in body end-to-end
 
 ### Changed
 - `Rule.body` changed from `Vec<EdnValue>` to `Vec<WhereClause>` to support negation clauses alongside patterns
@@ -928,8 +928,8 @@ deferred to post-1.0 backlog).
 
 ### Changed
 - `README.md` Performance section now links to `BENCHMARKS.md` for full benchmark details
-- Phase badge and status text updated to reflect Phase 6.4b completion
-- crates.io publish deferred to Phase 7.8 (API cleanup + publish prep; file format v6 now complete)
+- README status text updated to reflect the completed benchmark and publish-preparation work
+- crates.io publication deferred to a later preparation release (API cleanup; file format v6 now complete)
 
 ### Removed
 - Dead `clap` dependency from `[dependencies]` — `clap` was listed but never imported in library or binary code
@@ -1026,7 +1026,7 @@ deferred to post-1.0 backlog).
 
 ### Changed
 - **Breaking behaviour**: queries without `:valid-at` now return only currently valid
-  facts (`valid_from <= now < valid_to`). Existing Phase 3 databases are unaffected
+  facts (`valid_from <= now < valid_to`). Existing databases from that era are unaffected
   because all migrated facts have `valid_to = MAX`.
 - `FactStorage::transact()` now accepts an optional `TransactOptions` parameter
 

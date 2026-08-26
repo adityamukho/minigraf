@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Minigraf is a tiny, portable **bi-temporal graph database with Datalog queries** written in Rust. Designed as the embedded graph memory layer for AI agents, mobile apps, and the browser — built on the SQLite philosophy: embedded, single-file, reliable, with time travel.
 
-See `ROADMAP.md` for the current phase, full plan, and publish gate. See `CHANGELOG.md` for per-phase implementation history.
+See `ROADMAP.md` for planned work and current direction. See `CHANGELOG.md` for completed-release history.
 
 ## Core Philosophy - CRITICAL
 
@@ -172,11 +172,11 @@ See `docs/TEST_COVERAGE.md` for the full per-file breakdown.
 
 **Testing conventions** — see the Testing Conventions section below before writing any tests.
 
-## Key Files for the Next Phase
+## Current Maintainer Context
 
-Phase 8 is complete — v1.0.0 released. Wave 3 Reliability is complete. #231 Repo Split is complete — Python, Node, WASM, Java, Android, Swift, and C bindings are all in separate repos under the project-minigraf org. Wave 8 Documentation is complete (#190, #191, #192). v1.2.0 released — magic sets rewriting (#289) and per-query limits (#288). **v2.0.0 released** — kernel file locking (#317, #304): `std::fs::File::try_lock` on the `.graph` file replaced the `.graph.lock` PID sidecar, which bricked databases after any container restart; structured runtime error codes (#277: 186 `ErrorCode` variants across PRS/QRY/STG/WAL/API/INT categories, `MinigrafError` replaces `anyhow::Result<T>` on the public API); `OpenOptions` is now `#[non_exhaustive]`; MSRV bumped to 1.89. Major version chosen deliberately — see the CHANGELOG's breaking-changes section for the full rationale. Wave 5 (Query Profiler, milestone v2.1.0) is next.
+**v2.0.0 released** — it introduced kernel file locking (#317, #304), structured runtime error codes (#277), `OpenOptions` `#[non_exhaustive]`, and an MSRV of Rust 1.89. See `CHANGELOG.md` for the full rationale and release history.
 
-Wave 5 relevant areas (see `ROADMAP.md` for full spec):
+Relevant areas for the planned query-profiler work (see `ROADMAP.md`):
 - `src/query/datalog/` — query executor where profiling hooks will go (#185)
 - `docs/BENCHMARKS.md` — post-1.0 performance baseline updates
 
@@ -213,9 +213,9 @@ Applies to all `#[cfg(test)]` modules and all `tests/*.rs` files.
 5. **Test everything** — no untested code
 6. **Think SQLite** — would SQLite do this?
 7. **Long-term vision** — building for decades
-8. **Sync all docs at phase completion** — when a phase is marked complete, update and cross-check ALL of: `CLAUDE.md` (status line, test count), `ROADMAP.md`, `README.md`, `docs/TEST_COVERAGE.md`, `CHANGELOG.md`. No doc should contradict another.
+8. **Keep documentation synchronized** — when a release or planned-work item changes, update and cross-check ALL of: `CLAUDE.md` (status line, test count), `ROADMAP.md`, `README.md`, `docs/TEST_COVERAGE.md`, `CHANGELOG.md`. No doc should contradict another.
    Also update affected wiki pages in `.wiki/`: `Architecture.md` (module/format/model changes), `Datalog-Reference.md` (new syntax), `Comparison.md` (feature matrix), `Use-Cases.md` (deployment targets). Commit and push the wiki repo separately (`cd .wiki && git add -A && git commit -m "..." && git push`).
-9. **Tag every version bump** — after the final doc-sync commit: `git tag -a v<x.y.z> -m "<phase> complete — <summary>"` then `git push origin v<x.y.z>`.
+9. **Tag every version bump** — after the final doc-sync commit: `git tag -a v<x.y.z> -m "<release> — <summary>"` then `git push origin v<x.y.z>`.
 
 ---
 

@@ -7,7 +7,6 @@
 [![Coverage](https://codecov.io/gh/project-minigraf/minigraf/branch/main/graph/badge.svg)](https://codecov.io/gh/project-minigraf/minigraf)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/project-minigraf/minigraf#license)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://blog.rust-lang.org/2024/10/17/Rust-1.82.0.html)
-[![Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/project-minigraf/minigraf/releases/tag/v2.0.0)
 
 > **Embedded graph memory for AI agents, mobile apps, and the browser** — the SQLite of bi-temporal graph databases
 
@@ -25,7 +24,7 @@ Minigraf is a **single-file embedded graph database** that lets you:
 - ✅ **Embed anywhere** - Native, WASM, mobile, IoT - one `.graph` file
 - ✅ **Zero configuration** - Just `Minigraf::open("data.graph")` and you're done
 
-**Status**: See [ROADMAP.md](ROADMAP.md) for current phase and what's next.
+**Status**: See [ROADMAP.md](ROADMAP.md) for planned work and current direction.
 
 ## Why Datalog?
 
@@ -42,7 +41,7 @@ Minigraf is a **single-file embedded graph database** that lets you:
 
 ```toml
 [dependencies]
-minigraf = "1.0"
+minigraf = "2.0.0"
 ```
 
 Or via cargo:
@@ -141,10 +140,10 @@ No other database offers this combination:
 | Node.js | [`minigraf` on npm](https://www.npmjs.com/package/minigraf) | [minigraf-node](https://github.com/project-minigraf/minigraf-node) |
 | Browser WASM | [`@minigraf/browser` on npm](https://www.npmjs.com/package/@minigraf/browser) | [minigraf-wasm](https://github.com/project-minigraf/minigraf-wasm) |
 | WASI | [`@minigraf/wasi` on npm](https://www.npmjs.com/package/@minigraf/wasi) | [minigraf-wasm](https://github.com/project-minigraf/minigraf-wasm) |
-| Java | (in this repo — Phase 2 split pending) | — |
-| Android | (in this repo — Phase 2 split pending) | — |
-| iOS/macOS | (in this repo — Phase 2 split pending) | — |
-| C | [`minigraf-c`](./minigraf-c) (in this repo) | — |
+| Java | `minigraf-jvm` on Maven Central | [minigraf-java](https://github.com/project-minigraf/minigraf-java) |
+| Android | Android bindings | [minigraf-android](https://github.com/project-minigraf/minigraf-android) |
+| iOS/macOS | Swift bindings | [minigraf-swift](https://github.com/project-minigraf/minigraf-swift) |
+| C | C bindings | [minigraf-c](https://github.com/project-minigraf/minigraf-c) |
 
 See the [Comparison](https://github.com/project-minigraf/minigraf/wiki/Comparison) wiki page for detailed analysis including temporal vs. time-series databases.
 
@@ -199,16 +198,11 @@ Minigraf will **not** be (by design):
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full phase plan, current status, and release strategy.
+See [ROADMAP.md](ROADMAP.md) for planned work and current direction.
 
 ## Performance
 
-Benchmarks on Intel Core i7-1065G7 @ 1.30GHz, 16 GB RAM, Rust 1.92.0. See [BENCHMARKS.md](docs/BENCHMARKS.md) for full tables.
-
-| Metric | Result |
-|---|---|
-| Insert (in-memory, single fact) | ~2.7 µs — flat across 1K–100K facts |
-| Insert (file-backed, WAL) | ~3.6 µs — flat across 1K–100K facts |
+See [BENCHMARKS.md](docs/BENCHMARKS.md) for the current reproducible local snapshot and benchmark commands.
 | Point query at 1M facts | 4.3–4.5 s (selective B+tree lookup for bounded patterns; O(N) for full-attribute scans) |
 | Open time at 1M facts | 1.31 s (2.4× faster than v5 — indexes no longer loaded into RAM) |
 | Peak heap at 1M facts | 1.05 GB (~21% less than v5 — indexes paged in on demand) |

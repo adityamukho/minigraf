@@ -109,7 +109,7 @@ Releases are managed by the project maintainer. The process is documented in iss
 1. All prerequisite issue PRs merged and CI green
 2. Version bumped consistently across all manifests (`Cargo.toml`, `package.json`, `pyproject.toml`, `build.gradle.kts`, `Package.swift`)
 3. `cargo check --workspace` passes cleanly
-4. All docs synced (see `CLAUDE.md` — "Sync all docs at phase completion")
+4. All affected docs synced (see `CLAUDE.md` — "Keep documentation synchronized")
 5. Tag pushed — CI publishes to crates.io, PyPI, npm, and Maven Central automatically
 
 ## Code of Conduct
