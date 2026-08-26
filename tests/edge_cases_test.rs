@@ -89,13 +89,11 @@ fn test_stale_wal_after_checkpoint_is_idempotent() {
 
     // Phase 1: insert alice with checkpoint suppressed; save WAL bytes
     {
-        let db = OpenOptions {
-            wal_checkpoint_threshold: usize::MAX,
-            ..Default::default()
-        }
-        .path(path)
-        .open()
-        .unwrap();
+        let db = OpenOptions::default()
+            .wal_checkpoint_threshold(usize::MAX)
+            .path(path)
+            .open()
+            .unwrap();
         db.execute("(transact [[:alice :age 30]])").unwrap();
         // Drop without checkpointing — WAL exists
     }
