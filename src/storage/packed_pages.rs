@@ -19,7 +19,7 @@
 //! Overflow pages (`page_type = 0x03`) are reserved for future use.
 //! The `next_page` field is always written as 0 in Phase 6.2.
 
-use crate::error::{ErrorCode, bail_coded};
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::types::Fact;
 use crate::storage::index::FactRef;
 use crate::storage::{PAGE_SIZE, StorageBackend};
@@ -71,10 +71,9 @@ pub fn pack_facts(facts: &[Fact], start_page_id: u64) -> Result<(Vec<Vec<u8>>, V
 
         // Check if this fact exceeds the maximum slot size.
         if len > MAX_FACT_BYTES {
-            anyhow::bail!(
-                "Fact serialised size {} bytes exceeds maximum slot size {} bytes",
-                len,
-                MAX_FACT_BYTES
+            bail_coded!(
+                ErrorCode::Int023,
+                format!("{len} bytes exceeds maximum slot size {MAX_FACT_BYTES} bytes")
             );
         }
 
@@ -99,37 +98,54 @@ pub fn pack_facts(facts: &[Fact], start_page_id: u64) -> Result<(Vec<Vec<u8>>, V
         current_page
             .get_mut(data_offset..data_offset.saturating_add(len))
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "packed page too short: data region {}..{} out of bounds",
-                    data_offset,
-                    data_offset.saturating_add(len)
+                err_coded!(
+                    ErrorCode::Int024,
+                    format!(
+                        "data region {}..{} out of bounds",
+                        data_offset,
+                        data_offset.saturating_add(len)
+                    )
                 )
             })?
             .copy_from_slice(&serialised);
 
         // Write directory entry: offset (u16 LE) | length (u16 LE).
         // data_offset <= PAGE_SIZE (4096) which fits in u16; len <= MAX_FACT_BYTES < u16::MAX.
-        let offset_u16 = u16::try_from(data_offset)
-            .map_err(|_| anyhow::anyhow!("data_offset {} overflows u16", data_offset))?;
-        let len_u16 = u16::try_from(len)
-            .map_err(|_| anyhow::anyhow!("serialised fact too large: {} bytes", len))?;
+        let offset_u16 = u16::try_from(data_offset).map_err(|_| {
+            err_coded!(
+                ErrorCode::Int024,
+                format!("data_offset {data_offset} overflows u16")
+            )
+        })?;
+        let len_u16 = u16::try_from(len).map_err(|_| {
+            err_coded!(
+                ErrorCode::Int024,
+                format!("serialised fact too large: {len} bytes")
+            )
+        })?;
         current_page
             .get_mut(dir_offset..dir_offset.saturating_add(2))
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "packed page dir out of bounds at {}..{}",
-                    dir_offset,
-                    dir_offset.saturating_add(2)
+                err_coded!(
+                    ErrorCode::Int024,
+                    format!(
+                        "dir out of bounds at {}..{}",
+                        dir_offset,
+                        dir_offset.saturating_add(2)
+                    )
                 )
             })?
             .copy_from_slice(&offset_u16.to_le_bytes());
         current_page
             .get_mut(dir_offset.saturating_add(2)..dir_offset.saturating_add(4))
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "packed page dir out of bounds at {}..{}",
-                    dir_offset.saturating_add(2),
-                    dir_offset.saturating_add(4)
+                err_coded!(
+                    ErrorCode::Int024,
+                    format!(
+                        "dir out of bounds at {}..{}",
+                        dir_offset.saturating_add(2),
+                        dir_offset.saturating_add(4)
+                    )
                 )
             })?
             .copy_from_slice(&len_u16.to_le_bytes());
@@ -137,7 +153,7 @@ pub fn pack_facts(facts: &[Fact], start_page_id: u64) -> Result<(Vec<Vec<u8>>, V
 
         let page_id = start_page_id.saturating_add(
             u64::try_from(pages.len())
-                .map_err(|_| anyhow::anyhow!("too many pages: overflows u64"))?,
+                .map_err(|_| err_coded!(ErrorCode::Int024, "too many pages: overflows u64"))?,
         );
         fact_refs.push(FactRef {
             page_id,
@@ -156,30 +172,32 @@ pub fn pack_facts(facts: &[Fact], start_page_id: u64) -> Result<(Vec<Vec<u8>>, V
 /// Read a single fact from a packed page at the given slot index.
 pub fn read_slot(page: &[u8], slot: u16) -> Result<Fact> {
     if page.len() < PAGE_SIZE {
-        anyhow::bail!(
-            "Page too short: {} bytes (expected {})",
-            page.len(),
-            PAGE_SIZE
+        bail_coded!(
+            ErrorCode::Int024,
+            format!(
+                "Page too short: {} bytes (expected {})",
+                page.len(),
+                PAGE_SIZE
+            )
         );
     }
     let page_type = *page
         .first()
-        .ok_or_else(|| anyhow::anyhow!("packed page empty"))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int024, "packed page empty"))?;
     if page_type != PAGE_TYPE_PACKED {
         bail_coded!(ErrorCode::Stg014, format!("{:02x}", page_type));
     }
     let b2 = *page
         .get(2)
-        .ok_or_else(|| anyhow::anyhow!("packed page too short for record_count byte 2"))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int024, "too short for record_count byte 2"))?;
     let b3 = *page
         .get(3)
-        .ok_or_else(|| anyhow::anyhow!("packed page too short for record_count byte 3"))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int024, "too short for record_count byte 3"))?;
     let record_count = u16::from_le_bytes([b2, b3]);
     if slot >= record_count {
-        anyhow::bail!(
-            "Slot {} out of bounds (page has {} records)",
-            slot,
-            record_count
+        bail_coded!(
+            ErrorCode::Int024,
+            format!("Slot {slot} out of bounds (page has {record_count} records)")
         );
     }
     // dir_base = PACKED_HEADER_SIZE + slot * 4; slot < record_count <= u16::MAX,
@@ -188,16 +206,25 @@ pub fn read_slot(page: &[u8], slot: u16) -> Result<Fact> {
     let dir_base = PACKED_HEADER_SIZE.saturating_add(slot_usize.saturating_mul(4));
     let db0 = *page
         .get(dir_base)
-        .ok_or_else(|| anyhow::anyhow!("packed page dir entry {} out of bounds", slot))?;
-    let db1 = *page
-        .get(dir_base.saturating_add(1))
-        .ok_or_else(|| anyhow::anyhow!("packed page dir entry {} byte 1 out of bounds", slot))?;
-    let db2 = *page
-        .get(dir_base.saturating_add(2))
-        .ok_or_else(|| anyhow::anyhow!("packed page dir entry {} byte 2 out of bounds", slot))?;
-    let db3 = *page
-        .get(dir_base.saturating_add(3))
-        .ok_or_else(|| anyhow::anyhow!("packed page dir entry {} byte 3 out of bounds", slot))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int024, format!("dir entry {slot} out of bounds")))?;
+    let db1 = *page.get(dir_base.saturating_add(1)).ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int024,
+            format!("dir entry {slot} byte 1 out of bounds")
+        )
+    })?;
+    let db2 = *page.get(dir_base.saturating_add(2)).ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int024,
+            format!("dir entry {slot} byte 2 out of bounds")
+        )
+    })?;
+    let db3 = *page.get(dir_base.saturating_add(3)).ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int024,
+            format!("dir entry {slot} byte 3 out of bounds")
+        )
+    })?;
     let offset = usize::from(u16::from_le_bytes([db0, db1]));
     let length = usize::from(u16::from_le_bytes([db2, db3]));
     if offset.saturating_add(length) > PAGE_SIZE {
@@ -206,10 +233,13 @@ pub fn read_slot(page: &[u8], slot: u16) -> Result<Fact> {
     let fact: Fact = postcard::from_bytes(
         page.get(offset..offset.saturating_add(length))
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "packed page record {}..{} out of bounds",
-                    offset,
-                    offset.saturating_add(length)
+                err_coded!(
+                    ErrorCode::Int024,
+                    format!(
+                        "record {}..{} out of bounds",
+                        offset,
+                        offset.saturating_add(length)
+                    )
                 )
             })?,
     )?;

@@ -1,4 +1,5 @@
 /// In-memory storage backend for testing and embedded use.
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::storage::{PAGE_SIZE, StorageBackend};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -40,17 +41,13 @@ impl Default for MemoryBackend {
 impl StorageBackend for MemoryBackend {
     fn write_page(&mut self, page_id: u64, data: &[u8]) -> Result<()> {
         if data.len() != PAGE_SIZE {
-            anyhow::bail!(
-                "Invalid page size: {} bytes (expected {})",
-                data.len(),
-                PAGE_SIZE
-            );
+            bail_coded!(ErrorCode::Int051, data.len(), PAGE_SIZE);
         }
 
         let mut pages = self
             .pages
             .write()
-            .map_err(|_| anyhow::anyhow!("pages lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "pages"))?;
         pages.insert(page_id, data.to_vec());
         Ok(())
     }
@@ -59,11 +56,11 @@ impl StorageBackend for MemoryBackend {
         let pages = self
             .pages
             .read()
-            .map_err(|_| anyhow::anyhow!("pages lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "pages"))?;
         pages
             .get(&page_id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Page {} not found", page_id))
+            .ok_or_else(|| err_coded!(ErrorCode::Int052, page_id))
     }
 
     fn sync(&mut self) -> Result<()> {

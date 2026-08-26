@@ -3,7 +3,8 @@
 //! Supports UTC ISO 8601 strings only. Timezone offsets are rejected
 //! to avoid chrono's local timezone handling (GHSA-wcg3-cvx6-7396).
 
-use anyhow::{Result, anyhow};
+use crate::error::{ErrorCode, err_coded};
+use anyhow::Result;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 /// Parse an ISO 8601 UTC string to milliseconds since UNIX epoch.
@@ -17,7 +18,8 @@ use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 pub fn parse_timestamp(s: &str) -> Result<i64> {
     // Reject timezone offsets explicitly
     if s.contains('+') || s.get(10..).is_some_and(|rest| rest.contains('-')) {
-        return Err(anyhow!(
+        return Err(err_coded!(
+            ErrorCode::Int004,
             "timezone offsets are not supported; use UTC (Z) timestamps only. \
              chrono's local timezone handling (GHSA-wcg3-cvx6-7396) is avoided by design."
         ));
@@ -25,21 +27,25 @@ pub fn parse_timestamp(s: &str) -> Result<i64> {
 
     // Try full datetime first
     if s.contains('T') {
-        let dt = s
-            .parse::<DateTime<Utc>>()
-            .map_err(|e| anyhow!("invalid UTC timestamp '{}': {}", s, e))?;
+        let dt = s.parse::<DateTime<Utc>>().map_err(|e| {
+            err_coded!(
+                ErrorCode::Int004,
+                format!("invalid UTC timestamp '{s}': {e}")
+            )
+        })?;
         return Ok(dt.timestamp_millis());
     }
 
     // Try date-only (YYYY-MM-DD)
     let date = s
         .parse::<NaiveDate>()
-        .map_err(|e| anyhow!("invalid date '{}': {}", s, e))?;
-    let dt = Utc.from_utc_datetime(
-        &date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| anyhow!("invalid date '{}': could not create midnight UTC", s))?,
-    );
+        .map_err(|e| err_coded!(ErrorCode::Int004, format!("invalid date '{s}': {e}")))?;
+    let dt = Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int004,
+            format!("invalid date '{s}': could not create midnight UTC")
+        )
+    })?);
     Ok(dt.timestamp_millis())
 }
 
@@ -50,12 +56,8 @@ pub fn parse_timestamp(s: &str) -> Result<i64> {
 /// callers should check for the sentinel before formatting.
 #[allow(dead_code)]
 pub fn millis_to_timestamp_string(millis: i64) -> Result<String> {
-    let dt = DateTime::<Utc>::from_timestamp_millis(millis).ok_or_else(|| {
-        anyhow!(
-            "millisecond value {} is outside the supported datetime range",
-            millis
-        )
-    })?;
+    let dt = DateTime::<Utc>::from_timestamp_millis(millis)
+        .ok_or_else(|| err_coded!(ErrorCode::Int005, millis))?;
     Ok(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 

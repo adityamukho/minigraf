@@ -1,4 +1,4 @@
-use crate::error::MinigrafError;
+use crate::error::{ErrorCode, MinigrafError, bail_coded};
 use crate::graph::FactStorage;
 use crate::graph::types::Value;
 use crate::query::datalog::executor::{DatalogExecutor, QueryResult};
@@ -109,7 +109,7 @@ impl PreparedQuery {
 
         for name in &self.slot_names {
             if !binding_map.contains_key(name.as_str()) {
-                anyhow::bail!("missing bind value for slot '${}'", name);
+                bail_coded!(ErrorCode::Int033, name);
             }
         }
 
@@ -154,11 +154,7 @@ fn validate_clauses_no_attr_slots(clauses: &[WhereClause]) -> Result<()> {
         match clause {
             WhereClause::Pattern(p) => {
                 if let AttributeSpec::Real(EdnValue::BindSlot(name)) = &p.attribute {
-                    anyhow::bail!(
-                        "bind slot '${name}' is not permitted in attribute position; \
-                         the query optimizer selects an index based on the attribute at \
-                         prepare time and cannot handle a parameterised attribute"
-                    );
+                    bail_coded!(ErrorCode::Int034, name);
                 }
             }
             WhereClause::Not(inner) => validate_clauses_no_attr_slots(inner)?,
@@ -355,33 +351,42 @@ fn substitute_edn_value(val: &mut EdnValue, bindings: &HashMap<&str, &BindValue>
 fn resolve_entity_slot(name: &str, bindings: &HashMap<&str, &BindValue>) -> Result<EdnValue> {
     match bindings.get(name) {
         Some(BindValue::Entity(u)) => Ok(EdnValue::Uuid(*u)),
-        Some(other) => anyhow::bail!(
-            "slot '${name}' in entity position requires Entity, got {}",
+        Some(other) => bail_coded!(
+            ErrorCode::Int035,
+            name,
+            "entity",
+            "Entity",
             bind_value_type_name(other)
         ),
-        None => anyhow::bail!("missing bind value for slot '${name}'"),
+        None => bail_coded!(ErrorCode::Int033, name),
     }
 }
 
 fn resolve_value_slot(name: &str, bindings: &HashMap<&str, &BindValue>) -> Result<EdnValue> {
     match bindings.get(name) {
         Some(BindValue::Val(v)) => Ok(value_to_edn(v)),
-        Some(other) => anyhow::bail!(
-            "slot '${name}' in value position requires Val, got {}",
+        Some(other) => bail_coded!(
+            ErrorCode::Int035,
+            name,
+            "value",
+            "Val",
             bind_value_type_name(other)
         ),
-        None => anyhow::bail!("missing bind value for slot '${name}'"),
+        None => bail_coded!(ErrorCode::Int033, name),
     }
 }
 
 fn resolve_val_slot(name: &str, bindings: &HashMap<&str, &BindValue>) -> Result<Value> {
     match bindings.get(name) {
         Some(BindValue::Val(v)) => Ok(v.clone()),
-        Some(other) => anyhow::bail!(
-            "slot '${name}' in expression position requires Val, got {}",
+        Some(other) => bail_coded!(
+            ErrorCode::Int035,
+            name,
+            "expression",
+            "Val",
             bind_value_type_name(other)
         ),
-        None => anyhow::bail!("missing bind value for slot '${name}'"),
+        None => bail_coded!(ErrorCode::Int033, name),
     }
 }
 
@@ -389,11 +394,14 @@ fn resolve_as_of_slot(name: &str, bindings: &HashMap<&str, &BindValue>) -> Resul
     match bindings.get(name) {
         Some(BindValue::TxCount(n)) => Ok(AsOf::Counter(*n)),
         Some(BindValue::Timestamp(t)) => Ok(AsOf::Timestamp(*t)),
-        Some(other) => anyhow::bail!(
-            "slot '${name}' in :as-of position requires TxCount or Timestamp, got {}",
+        Some(other) => bail_coded!(
+            ErrorCode::Int035,
+            name,
+            ":as-of",
+            "TxCount or Timestamp",
             bind_value_type_name(other)
         ),
-        None => anyhow::bail!("missing bind value for slot '${name}'"),
+        None => bail_coded!(ErrorCode::Int033, name),
     }
 }
 
@@ -401,11 +409,14 @@ fn resolve_valid_at_slot(name: &str, bindings: &HashMap<&str, &BindValue>) -> Re
     match bindings.get(name) {
         Some(BindValue::Timestamp(t)) => Ok(ValidAt::Timestamp(*t)),
         Some(BindValue::AnyValidTime) => Ok(ValidAt::AnyValidTime),
-        Some(other) => anyhow::bail!(
-            "slot '${name}' in :valid-at position requires Timestamp or AnyValidTime, got {}",
+        Some(other) => bail_coded!(
+            ErrorCode::Int035,
+            name,
+            ":valid-at",
+            "Timestamp or AnyValidTime",
             bind_value_type_name(other)
         ),
-        None => anyhow::bail!("missing bind value for slot '${name}'"),
+        None => bail_coded!(ErrorCode::Int033, name),
     }
 }
 

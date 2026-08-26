@@ -2,7 +2,7 @@ use super::types::*;
 use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::types::Value;
 use crate::temporal::parse_timestamp;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use uuid::Uuid;
 
 const MAX_STRING_LENGTH: usize = 1024 * 1024; // 1MB
@@ -145,14 +145,14 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                         let mut num_str = String::from("-");
                         let (is_float, num) = parse_number(&mut chars, &mut num_str)?;
                         if is_float {
-                            let f: f64 = num.parse().map_err(|_| {
-                                anyhow::anyhow!("Float literal out of range: {}", num)
-                            })?;
+                            let f: f64 = num
+                                .parse()
+                                .map_err(|_| err_coded!(ErrorCode::Int007, num.clone()))?;
                             tokens.push(Token::Float(f));
                         } else {
-                            let i: i64 = num.parse().map_err(|_| {
-                                anyhow::anyhow!("Integer literal out of range: {}", num)
-                            })?;
+                            let i: i64 = num
+                                .parse()
+                                .map_err(|_| err_coded!(ErrorCode::Int008, num.clone()))?;
                             tokens.push(Token::Integer(i));
                         }
                     } else {
@@ -174,12 +174,12 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                 if is_float {
                     let f: f64 = num
                         .parse()
-                        .map_err(|_| anyhow::anyhow!("Float literal out of range: {}", num))?;
+                        .map_err(|_| err_coded!(ErrorCode::Int007, num.clone()))?;
                     tokens.push(Token::Float(f));
                 } else {
                     let i: i64 = num
                         .parse()
-                        .map_err(|_| anyhow::anyhow!("Integer literal out of range: {}", num))?;
+                        .map_err(|_| err_coded!(ErrorCode::Int008, num.clone()))?;
                     tokens.push(Token::Integer(i));
                 }
             }
@@ -189,10 +189,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                 while let Some(&ch) = chars.peek() {
                     if ch.is_alphanumeric() || ch == '?' || ch == '_' || ch == '-' || ch == '/' {
                         if symbol.len() >= MAX_SYMBOL_LENGTH {
-                            bail!(
-                                "Symbol exceeds maximum length of {} bytes",
-                                MAX_SYMBOL_LENGTH
-                            );
+                            bail_coded!(ErrorCode::Int009, MAX_SYMBOL_LENGTH);
                         }
                         symbol.push(ch);
                         chars.next();
@@ -254,7 +251,10 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                     }
                 }
                 if name.is_empty() {
-                    bail!("Bind slot '$' must be followed by an identifier (e.g. $entity)");
+                    bail_coded!(
+                        ErrorCode::Int019,
+                        "Bind slot '$' must be followed by an identifier (e.g. $entity)"
+                    );
                 }
                 tokens.push(Token::BindSlot(name));
             }
@@ -294,10 +294,7 @@ fn parse_symbol(chars: &mut std::iter::Peekable<std::str::Chars>, first: char) -
     while let Some(&ch) = chars.peek() {
         if ch.is_alphanumeric() || ch == '?' || ch == '_' || ch == '-' || ch == '/' {
             if symbol.len() >= MAX_SYMBOL_LENGTH {
-                bail!(
-                    "Symbol exceeds maximum length of {} bytes",
-                    MAX_SYMBOL_LENGTH
-                );
+                bail_coded!(ErrorCode::Int009, MAX_SYMBOL_LENGTH);
             }
             symbol.push(ch);
             chars.next();
@@ -355,10 +352,7 @@ impl Parser {
         self.depth += 1;
         if self.depth > MAX_RECURSION_DEPTH {
             self.depth -= 1;
-            bail!(
-                "Exceeded maximum recursion depth of {}",
-                MAX_RECURSION_DEPTH
-            );
+            bail_coded!(ErrorCode::Int010, MAX_RECURSION_DEPTH);
         }
         let result = self.parse_value_inner();
         self.depth -= 1;
@@ -375,42 +369,42 @@ impl Parser {
                     Ok(EdnValue::Keyword(k))
                 } else {
                     // peek confirmed Keyword variant; advance should match
-                    bail!("internal parser error: expected keyword token");
+                    bail_coded!(ErrorCode::Int006, "keyword");
                 }
             }
             Some(Token::Symbol(_)) => {
                 if let Some(Token::Symbol(s)) = self.advance() {
                     Ok(EdnValue::Symbol(s))
                 } else {
-                    bail!("internal parser error: expected symbol token");
+                    bail_coded!(ErrorCode::Int006, "symbol");
                 }
             }
             Some(Token::String(_)) => {
                 if let Some(Token::String(s)) = self.advance() {
                     Ok(EdnValue::String(s))
                 } else {
-                    bail!("internal parser error: expected string token");
+                    bail_coded!(ErrorCode::Int006, "string");
                 }
             }
             Some(Token::Integer(_)) => {
                 if let Some(Token::Integer(i)) = self.advance() {
                     Ok(EdnValue::Integer(i))
                 } else {
-                    bail!("internal parser error: expected integer token");
+                    bail_coded!(ErrorCode::Int006, "integer");
                 }
             }
             Some(Token::Float(_)) => {
                 if let Some(Token::Float(f)) = self.advance() {
                     Ok(EdnValue::Float(f))
                 } else {
-                    bail!("internal parser error: expected float token");
+                    bail_coded!(ErrorCode::Int006, "float");
                 }
             }
             Some(Token::Boolean(_)) => {
                 if let Some(Token::Boolean(b)) = self.advance() {
                     Ok(EdnValue::Boolean(b))
                 } else {
-                    bail!("internal parser error: expected boolean token");
+                    bail_coded!(ErrorCode::Int006, "boolean");
                 }
             }
             Some(Token::TaggedLiteral(_)) => {
@@ -429,7 +423,7 @@ impl Parser {
                         bail_coded!(ErrorCode::Prs073, tag);
                     }
                 } else {
-                    bail!("internal parser error: expected tagged literal token");
+                    bail_coded!(ErrorCode::Int006, "tagged literal");
                 }
             }
             Some(Token::Nil) => {
@@ -440,7 +434,7 @@ impl Parser {
                 if let Some(Token::BindSlot(name)) = self.advance() {
                     Ok(EdnValue::BindSlot(name))
                 } else {
-                    bail!("internal parser error: expected bind slot token");
+                    bail_coded!(ErrorCode::Int006, "bind slot");
                 }
             }
             Some(token) => {
@@ -646,7 +640,7 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec> {
     while j < over_list.len() {
         let item = over_list
             .get(j)
-            .ok_or_else(|| anyhow::anyhow!("unexpected end of :over clause"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Int011, ":over clause"))?;
         match item {
             EdnValue::Keyword(k) => match k.as_str() {
                 ":partition-by" => {
@@ -685,8 +679,12 @@ fn parse_window_expr(elems: &[EdnValue]) -> Result<FindSpec> {
         j += 1;
     }
 
-    let order_by =
-        order_by.ok_or_else(|| anyhow::anyhow!("':order-by' is required in the ':over' clause"))?;
+    let order_by = order_by.ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int019,
+            "':order-by' is required in the ':over' clause"
+        )
+    })?;
 
     Ok(FindSpec::Window(WindowSpec {
         func,
@@ -711,7 +709,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
     #[allow(clippy::indexing_slicing)]
     let query_vector = elements[0]
         .as_vector()
-        .ok_or_else(|| anyhow::anyhow!("Query argument must be a vector"))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int019, "Query argument must be a vector"))?;
 
     let mut find_specs: Vec<FindSpec> = Vec::new();
     let mut with_vars: Vec<String> = Vec::new();
@@ -726,7 +724,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
     while i < query_vector.len() {
         let current_item = query_vector
             .get(i)
-            .ok_or_else(|| anyhow::anyhow!("unexpected end of query vector"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Int011, "query vector"))?;
         if let Some(keyword) = current_item.as_keyword() {
             match keyword {
                 ":as-of" => {
@@ -738,7 +736,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                     let as_of = match as_of_val {
                         EdnValue::Integer(n) if *n >= 0 => {
                             let val = u64::try_from(*n).map_err(|_| {
-                                anyhow::anyhow!(":as-of counter must be non-negative")
+                                err_coded!(ErrorCode::Int019, ":as-of counter must be non-negative")
                             })?;
                             AsOf::Counter(val)
                         }
@@ -789,12 +787,12 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                 }
                 ":max-derived-facts" => {
                     if query_max_derived_facts.is_some() {
-                        bail!("duplicate :max-derived-facts");
+                        bail_coded!(ErrorCode::Int012, ":max-derived-facts");
                     }
                     i += 1;
                     let val = query_vector
                         .get(i)
-                        .ok_or_else(|| anyhow::anyhow!(":max-derived-facts requires a value"))?;
+                        .ok_or_else(|| err_coded!(ErrorCode::Int013, ":max-derived-facts"))?;
                     match val {
                         EdnValue::Integer(n) if *n >= 1 => {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -803,10 +801,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                             }
                         }
                         EdnValue::Integer(_) => {
-                            bail!(":max-derived-facts must be >= 1");
+                            bail_coded!(ErrorCode::Int014, ":max-derived-facts");
                         }
                         _other => {
-                            bail!(":max-derived-facts must be a positive integer");
+                            bail_coded!(ErrorCode::Int015, ":max-derived-facts");
                         }
                     }
                     i += 1;
@@ -814,12 +812,12 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                 }
                 ":max-results" => {
                     if query_max_results.is_some() {
-                        bail!("duplicate :max-results");
+                        bail_coded!(ErrorCode::Int012, ":max-results");
                     }
                     i += 1;
                     let val = query_vector
                         .get(i)
-                        .ok_or_else(|| anyhow::anyhow!(":max-results requires a value"))?;
+                        .ok_or_else(|| err_coded!(ErrorCode::Int013, ":max-results"))?;
                     match val {
                         EdnValue::Integer(n) if *n >= 1 => {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -828,10 +826,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                             }
                         }
                         EdnValue::Integer(_) => {
-                            bail!(":max-results must be >= 1");
+                            bail_coded!(ErrorCode::Int014, ":max-results");
                         }
                         _other => {
-                            bail!(":max-results must be a positive integer");
+                            bail_coded!(ErrorCode::Int015, ":max-results");
                         }
                     }
                     i += 1;
@@ -842,7 +840,7 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                     i += 1;
                     while i < query_vector.len() {
                         let with_item = query_vector.get(i).ok_or_else(|| {
-                            anyhow::anyhow!("unexpected end of query vector in :with")
+                            err_coded!(ErrorCode::Int011, "query vector in :with")
                         })?;
                         match with_item {
                             EdnValue::Symbol(s) if s.starts_with('?') => {
@@ -851,7 +849,10 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                             }
                             EdnValue::Keyword(_) => break,
                             other => {
-                                bail!("':with' clause accepts only variables, got {:?}", other);
+                                bail_coded!(
+                                    ErrorCode::Int019,
+                                    format!("':with' clause accepts only variables, got {other:?}")
+                                );
                             }
                         }
                     }
@@ -874,9 +875,11 @@ fn parse_query(elements: &[EdnValue]) -> Result<DatalogCommand> {
                     find_specs.push(parse_aggregate(elems)?);
                 }
                 other => {
-                    bail!(
-                        "Expected variable or aggregate expression in :find clause, got {:?}",
-                        other
+                    bail_coded!(
+                        ErrorCode::Int019,
+                        format!(
+                            "Expected variable or aggregate expression in :find clause, got {other:?}"
+                        )
                     );
                 }
             },
@@ -961,7 +964,10 @@ fn parse_transact(elements: &[EdnValue]) -> Result<DatalogCommand> {
     // Check if the first element is a map (transaction-level options)
     let (tx_valid_from, tx_valid_to, facts_element, consumed) = if first_element.is_map() {
         let map = first_element.as_map().ok_or_else(|| {
-            anyhow::anyhow!("internal error: is_map() true but as_map() returned None")
+            err_coded!(
+                ErrorCode::Int019,
+                "internal error: is_map() true but as_map() returned None"
+            )
         })?;
         let (from, to) = parse_valid_time_map(map)?;
         let facts_elem = elements
@@ -1063,9 +1069,11 @@ fn parse_valid_time_map(pairs: &[(EdnValue, EdnValue)]) -> Result<(Option<i64>, 
                 valid_to = Some(parse_timestamp(s)?);
             }
             _ => {
-                bail!(
-                    "Unknown key in valid-time map: {:?}; expected :valid-from or :valid-to",
-                    key
+                bail_coded!(
+                    ErrorCode::Int019,
+                    format!(
+                        "Unknown key in valid-time map: {key:?}; expected :valid-from or :valid-to"
+                    )
                 );
             }
         }
@@ -1094,7 +1102,7 @@ fn parse_retract(elements: &[EdnValue]) -> Result<DatalogCommand> {
     for fact in facts_vector {
         let fact_vec = fact
             .as_vector()
-            .ok_or_else(|| anyhow::anyhow!("Each fact must be a vector [e a v]"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Int019, "Each fact must be a vector [e a v]"))?;
         patterns.push(Pattern::from_edn(fact_vec).map_err(anyhow::Error::msg)?);
     }
 
@@ -1174,7 +1182,10 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr> {
                 match &rhs {
                     Expr::Lit(Value::String(pattern)) => {
                         let compiled = regex_lite::Regex::new(pattern).map_err(|e| {
-                            anyhow::anyhow!("invalid regex pattern {:?}: {}", pattern, e)
+                            err_coded!(
+                                ErrorCode::Int019,
+                                format!("invalid regex pattern {pattern:?}: {e}")
+                            )
                         })?;
                         let rhs_lit = Expr::Lit(Value::String(pattern.clone()));
                         return Ok(Expr::BinOp(
@@ -1237,12 +1248,18 @@ fn parse_expr(list: &[EdnValue]) -> Result<Expr> {
 ///
 /// Called from `:where` dispatch when `vec[0]` is an `EdnValue::List`.
 fn parse_expr_clause(vec: &[EdnValue]) -> Result<WhereClause> {
-    let first = vec
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("parse_expr_clause called with empty vector"))?;
+    let first = vec.first().ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int019,
+            "parse_expr_clause called with empty vector"
+        )
+    })?;
     let inner_list = match first {
         EdnValue::List(l) => l.as_slice(),
-        _ => bail!("parse_expr_clause called with non-list element 0"),
+        _ => bail_coded!(
+            ErrorCode::Int019,
+            "parse_expr_clause called with non-list element 0"
+        ),
     };
     let expr = parse_expr(inner_list)?;
     let binding = match vec.len() {
@@ -1250,7 +1267,7 @@ fn parse_expr_clause(vec: &[EdnValue]) -> Result<WhereClause> {
         2 => {
             let second = vec
                 .get(1)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of expression clause"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "expression clause"))?;
             match second {
                 EdnValue::Symbol(s) if s.starts_with('?') => Some(s.clone()),
                 other => {
@@ -1286,7 +1303,7 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
             let mut inner = Vec::new();
             let rest = list
                 .get(1..)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of not clause"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "not clause"))?;
             for item in rest {
                 if let Some(vec) = item.as_vector() {
                     if matches!(vec.first(), Some(EdnValue::List(_))) {
@@ -1300,15 +1317,15 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
                     // Reject (or ...)/(or-join ...) inside not bodies
                     if matches!(inner_list.first(), Some(EdnValue::Symbol(s)) if s == "or" || s == "or-join")
                     {
-                        bail!("(or)/(or-join) cannot appear inside (not)/(not-join)");
+                        bail_coded!(ErrorCode::Int016);
                     }
                     // Recurse with allow_not=false to reject nested not
                     let clause = parse_list_as_where_clause(inner_list, false)?;
                     inner.push(clause);
                 } else {
-                    bail!(
-                        "expected pattern or rule invocation inside (not), got {:?}",
-                        item
+                    bail_coded!(
+                        ErrorCode::Int019,
+                        format!("expected pattern or rule invocation inside (not), got {item:?}")
                     );
                 }
             }
@@ -1316,7 +1333,10 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
         }
         EdnValue::Symbol(s) if s == "not-join" => {
             if !allow_not {
-                bail!("(not-join ...) cannot appear inside another (not ...) or (not-join ...)");
+                bail_coded!(
+                    ErrorCode::Int019,
+                    "(not-join ...) cannot appear inside another (not ...) or (not-join ...)"
+                );
             }
             // Syntax: (not-join [?v1 ?v2 ...] clause1 clause2 ...)
             if list.len() < 3 {
@@ -1325,23 +1345,26 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
             let join_var_vec = match list.get(1) {
                 Some(EdnValue::Vector(v)) => v,
                 _ => {
-                    bail!("(not-join) first argument must be a vector of join variables");
+                    bail_coded!(
+                        ErrorCode::Int019,
+                        "(not-join) first argument must be a vector of join variables"
+                    );
                 }
             };
             let join_vars: Vec<String> = join_var_vec
                 .iter()
                 .map(|v| match v {
                     EdnValue::Symbol(s) if s.starts_with('?') => Ok(s.clone()),
-                    _ => Err(anyhow::anyhow!(
-                        "(not-join) join variables must be logic variables, got {:?}",
-                        v
+                    _ => Err(err_coded!(
+                        ErrorCode::Int019,
+                        format!("(not-join) join variables must be logic variables, got {v:?}")
                     )),
                 })
                 .collect::<Result<_>>()?;
             let mut inner = Vec::new();
             let rest = list
                 .get(2..)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of not-join clause"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "not-join clause"))?;
             for item in rest {
                 if let Some(vec) = item.as_vector() {
                     if matches!(vec.first(), Some(EdnValue::List(_))) {
@@ -1355,15 +1378,17 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
                     // Reject (or ...)/(or-join ...) inside not-join bodies
                     if matches!(inner_list.first(), Some(EdnValue::Symbol(s)) if s == "or" || s == "or-join")
                     {
-                        bail!("(or)/(or-join) cannot appear inside (not)/(not-join)");
+                        bail_coded!(ErrorCode::Int016);
                     }
                     // allow_not=false to reject nested (not ...) or (not-join ...)
                     let clause = parse_list_as_where_clause(inner_list, false)?;
                     inner.push(clause);
                 } else {
-                    bail!(
-                        "expected pattern or rule invocation inside (not-join), got {:?}",
-                        item
+                    bail_coded!(
+                        ErrorCode::Int019,
+                        format!(
+                            "expected pattern or rule invocation inside (not-join), got {item:?}"
+                        )
                     );
                 }
             }
@@ -1379,7 +1404,7 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
             let mut branches: Vec<Vec<WhereClause>> = Vec::new();
             let rest = list
                 .get(1..)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of or clause"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "or clause"))?;
             for item in rest {
                 let branch = parse_or_branch(item)?;
                 branches.push(branch);
@@ -1409,7 +1434,7 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
             let mut branches: Vec<Vec<WhereClause>> = Vec::new();
             let rest = list
                 .get(2..)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of or-join clause"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "or-join clause"))?;
             for item in rest {
                 let branch = parse_or_branch(item)?;
                 branches.push(branch);
@@ -1422,16 +1447,16 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
         EdnValue::Symbol(predicate) => {
             let args = list
                 .get(1..)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of rule invocation"))?
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "rule invocation"))?
                 .to_vec();
             Ok(WhereClause::RuleInvocation {
                 predicate: predicate.clone(),
                 args,
             })
         }
-        _ => bail!(
-            "Rule invocation must start with predicate name (symbol), got {:?}",
-            head
+        _ => bail_coded!(
+            ErrorCode::Int019,
+            format!("Rule invocation must start with predicate name (symbol), got {head:?}")
         ),
     }
 }
@@ -1443,9 +1468,12 @@ fn parse_list_as_where_clause(list: &[EdnValue], allow_not: bool) -> Result<Wher
 /// Falls through to `Pattern::from_edn` for regular patterns.
 fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern> {
     if vec.len() != 3 {
-        bail!(
-            "Pattern must have exactly 3 elements (E A V), got {}",
-            vec.len()
+        bail_coded!(
+            ErrorCode::Int019,
+            format!(
+                "Pattern must have exactly 3 elements (E A V), got {}",
+                vec.len()
+            )
         );
     }
 
@@ -1455,7 +1483,7 @@ fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern> {
     if let EdnValue::Keyword(k) = &vec[0]
         && PseudoAttr::from_keyword(k).is_some()
     {
-        bail!("pseudo-attribute {} is not valid in entity position", k);
+        bail_coded!(ErrorCode::Int017, k, "entity");
     }
 
     // Reject :db/* in value position
@@ -1463,7 +1491,7 @@ fn parse_query_pattern(vec: &[EdnValue]) -> Result<Pattern> {
     if let EdnValue::Keyword(k) = &vec[2]
         && PseudoAttr::from_keyword(k).is_some()
     {
-        bail!("pseudo-attribute {} is not valid in value position", k);
+        bail_coded!(ErrorCode::Int017, k, "value");
     }
 
     // Detect pseudo-attribute in attribute position
@@ -1494,7 +1522,7 @@ fn parse_or_branch(item: &EdnValue) -> Result<Vec<WhereClause>> {
             let mut clauses = Vec::new();
             let rest = inner
                 .get(1..)
-                .ok_or_else(|| anyhow::anyhow!("unexpected end of and clause"))?;
+                .ok_or_else(|| err_coded!(ErrorCode::Int011, "and clause"))?;
             for clause_item in rest {
                 clauses.push(parse_or_branch_item(clause_item)?);
             }
@@ -1521,7 +1549,10 @@ fn parse_or_branch_item(item: &EdnValue) -> Result<WhereClause> {
             // allow_not=true: or branches can contain not/not-join/or/or-join
             parse_list_as_where_clause(inner_list, true)
         }
-        _ => bail!("expected clause inside or branch, got {:?}", item),
+        _ => bail_coded!(
+            ErrorCode::Int019,
+            format!("expected clause inside or branch, got {item:?}")
+        ),
     }
 }
 
@@ -1615,10 +1646,7 @@ fn check_not_safety(
         if let WhereClause::Not(_) = clause {
             for var in vars_in_not(clause) {
                 if !outer_bound.contains(&var) {
-                    bail!(
-                        "variable {} in (not ...) is not bound by any outer clause",
-                        var
-                    );
+                    bail_coded!(ErrorCode::Int018, "variable", var, "(not ...)", "outer");
                 }
             }
         }
@@ -1637,9 +1665,12 @@ fn check_not_join_safety(
         if let WhereClause::NotJoin { join_vars, .. } = clause {
             for var in join_vars {
                 if !var.starts_with("?_") && !outer_bound.contains(var) {
-                    bail!(
-                        "join variable {} in (not-join ...) is not bound by any outer clause",
-                        var
+                    bail_coded!(
+                        ErrorCode::Int018,
+                        "join variable",
+                        var,
+                        "(not-join ...)",
+                        "outer"
                     );
                 }
             }
@@ -1680,9 +1711,12 @@ fn check_expr_safety_with_bound(
             WhereClause::Expr { expr, binding } => {
                 for var in expr_vars(expr) {
                     if !bound.contains(&var) {
-                        bail!(
-                            "variable {} in expression clause is not bound by any earlier clause",
-                            var
+                        bail_coded!(
+                            ErrorCode::Int018,
+                            "variable",
+                            var,
+                            "expression clause",
+                            "earlier"
                         );
                     }
                 }
@@ -1730,9 +1764,12 @@ fn check_expr_safety_with_bound(
             } => {
                 for var in join_vars {
                     if !var.starts_with("?_") && !bound.contains(var) {
-                        bail!(
-                            "join variable {} in (or-join ...) is not bound by any earlier clause",
-                            var
+                        bail_coded!(
+                            ErrorCode::Int018,
+                            "join variable",
+                            var,
+                            "(or-join ...)",
+                            "earlier"
                         );
                     }
                 }
@@ -1757,7 +1794,7 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand> {
     // elements[0] = Vector with head (list) + body (patterns/rule calls)
 
     if elements.is_empty() {
-        bail!("Rule must have a body");
+        bail_coded!(ErrorCode::Int019, "Rule must have a body");
     }
 
     if elements.len() > 1 {
@@ -1769,21 +1806,24 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand> {
     #[allow(clippy::indexing_slicing)]
     let body_vec = elements[0]
         .as_vector()
-        .ok_or_else(|| anyhow::anyhow!("Rule body must be a vector"))?;
+        .ok_or_else(|| err_coded!(ErrorCode::Int019, "Rule body must be a vector"))?;
 
     if body_vec.is_empty() {
-        bail!("Rule body cannot be empty");
+        bail_coded!(ErrorCode::Int019, "Rule body cannot be empty");
     }
 
     // First element is the head (must be a list)
     // SAFETY: is_empty() check above guarantees index 0 exists
     #[allow(clippy::indexing_slicing)]
-    let head_list = body_vec[0]
-        .as_list()
-        .ok_or_else(|| anyhow::anyhow!("Rule head must be a list: (predicate ?args)"))?;
+    let head_list = body_vec[0].as_list().ok_or_else(|| {
+        err_coded!(
+            ErrorCode::Int019,
+            "Rule head must be a list: (predicate ?args)"
+        )
+    })?;
 
     if head_list.is_empty() {
-        bail!("Rule head cannot be empty");
+        bail_coded!(ErrorCode::Int019, "Rule head cannot be empty");
     }
 
     // Verify head starts with a symbol (predicate name)
@@ -1791,7 +1831,10 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand> {
     #[allow(clippy::indexing_slicing)]
     match &head_list[0] {
         EdnValue::Symbol(_) => {}
-        _ => bail!("Rule head must start with a symbol (predicate name)"),
+        _ => bail_coded!(
+            ErrorCode::Int019,
+            "Rule head must start with a symbol (predicate name)"
+        ),
     }
 
     // Rest of body_vec are patterns, rule invocations, or (not ...) clauses
@@ -1812,15 +1855,20 @@ fn parse_rule(elements: &[EdnValue]) -> Result<DatalogCommand> {
             let clause = parse_list_as_where_clause(list, true)?;
             body_clauses.push(clause);
         } else {
-            bail!(
-                "Rule body clause must be a vector (pattern) or list (rule invocation / not), got {:?}",
-                item
+            bail_coded!(
+                ErrorCode::Int019,
+                format!(
+                    "Rule body clause must be a vector (pattern) or list (rule invocation / not), got {item:?}"
+                )
             );
         }
     }
 
     if body_clauses.is_empty() {
-        bail!("Rule must have at least one pattern or rule invocation in body");
+        bail_coded!(
+            ErrorCode::Int019,
+            "Rule must have at least one pattern or rule invocation in body"
+        );
     }
 
     // Safety check: variables in (not ...) must be bound by the rule head or outer body clauses

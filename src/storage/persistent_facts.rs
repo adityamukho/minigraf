@@ -231,9 +231,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         if header.version >= 7 && header.header_checksum != 0 {
             let computed = compute_header_checksum_from_bytes(&raw_header_bytes);
             if header.header_checksum != computed {
-                anyhow::bail!(
-                    "Header checksum mismatch: possible file corruption. Database may be damaged."
-                );
+                bail_coded!(ErrorCode::Int053);
             }
         }
 
@@ -422,9 +420,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
                 let current_header = FileHeader::from_bytes(&current_header_bytes)?;
                 let computed = compute_header_checksum_from_bytes(&current_header_bytes);
                 if current_header.header_checksum != computed {
-                    anyhow::bail!(
-                        "Header checksum mismatch: possible file corruption. Database may be damaged."
-                    );
+                    bail_coded!(ErrorCode::Int053);
                 }
             }
 
@@ -838,9 +834,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             Ok(mutex) => Ok(mutex
                 .into_inner()
                 .map_err(|_| err_coded!(ErrorCode::Stg016))?),
-            Err(_) => Err(anyhow::anyhow!(
-                "into_backend: backend Arc has multiple owners"
-            )),
+            Err(_) => Err(err_coded!(ErrorCode::Int047)),
         }
     }
 
@@ -903,10 +897,10 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
             backend.write_page(page_id, page_data)?;
         }
         let new_pages_len = u64::try_from(new_pages.len())
-            .map_err(|_| anyhow::anyhow!("new page count exceeds u64::MAX"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int048, "new page count exceeds u64::MAX"))?;
         let new_total_fact_pages = old_fact_page_count
             .checked_add(new_pages_len)
-            .ok_or_else(|| anyhow::anyhow!("fact page count overflow"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Int048, "fact page count overflow"))?;
 
         // Sync fact pages to disk before building indexes on top of them.
         // Without this, a crash during index build could leave partially-flushed
@@ -977,7 +971,7 @@ impl<B: StorageBackend + 'static> PersistentFactStorage<B> {
         header.node_count = curr_header
             .node_count
             .checked_add(pending_len)
-            .ok_or_else(|| anyhow::anyhow!("node_count overflow"))?;
+            .ok_or_else(|| err_coded!(ErrorCode::Int048, "node_count overflow"))?;
         header.last_checkpointed_tx_count = self.storage.current_tx_count();
         header.eavt_root_page = eavt_root;
         header.aevt_root_page = aevt_root;

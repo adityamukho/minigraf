@@ -2,6 +2,7 @@
 ///
 /// Rules are indexed by their predicate name (head). Multiple rules can share
 /// the same predicate (for defining base cases and recursive cases separately).
+use crate::error::{ErrorCode, err_coded};
 use crate::query::datalog::stratification::DependencyGraph;
 use crate::query::datalog::types::Rule;
 use anyhow::Result;
@@ -65,9 +66,10 @@ impl RuleRegistry {
         let graph = DependencyGraph::from_rules(self);
         if let Err(e) = graph.stratify() {
             // Roll back: remove the rule we just added
-            let rules = self.rules.get_mut(&predicate).ok_or_else(|| {
-                anyhow::anyhow!("rule predicate '{}' disappeared during rollback", predicate)
-            })?;
+            let rules = self
+                .rules
+                .get_mut(&predicate)
+                .ok_or_else(|| err_coded!(ErrorCode::Int055, predicate.clone()))?;
             rules.pop();
             if rules.is_empty() {
                 self.rules.remove(&predicate);

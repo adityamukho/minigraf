@@ -15,6 +15,7 @@
 //! semantics: frequently accessed pages are unlikely to be evicted but not
 //! strictly guaranteed MRU. For a 256-page cache this is an excellent tradeoff.
 
+use crate::error::{ErrorCode, err_coded};
 use crate::storage::StorageBackend;
 use anyhow::Result;
 use std::collections::{HashMap, VecDeque};
@@ -87,7 +88,7 @@ impl PageCache {
             let inner = self
                 .inner
                 .read()
-                .map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+                .map_err(|_| err_coded!(ErrorCode::Int050, "cache"))?;
             // Capacity 0 disables the cache: always read through, no bookkeeping.
             if inner.capacity == 0 {
                 return Ok(Arc::new(backend.read_page(page_id)?));
@@ -101,7 +102,7 @@ impl PageCache {
         let mut inner = self
             .inner
             .write()
-            .map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "cache"))?;
         // Double-check after acquiring write lock (another thread may have loaded it)
         if let Some(entry) = inner.entries.get(&page_id) {
             return Ok(entry.data.clone());
@@ -162,7 +163,7 @@ impl PageCache {
         let mut inner = self
             .inner
             .write()
-            .map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "cache"))?;
         for (&page_id, entry) in inner.entries.iter_mut() {
             if entry.dirty {
                 backend.write_page(page_id, &entry.data[..])?;

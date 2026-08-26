@@ -6,10 +6,11 @@ and related API methods.
 
 **Reference codes** (e.g. `PRS-001`) appear in runtime error output as
 `[CODE] message`, and programmatically via `MinigrafError::code()` /
-`MinigrafError::category()`. As of the [#277](https://github.com/project-minigraf/minigraf/issues/277)
-foundation PR, every runtime error carries a code — but until each
-category's follow-up migration PR lands, most still surface generically as
-`INT-000` rather than their documented code below.
+`MinigrafError::category()`. As of [#277](https://github.com/project-minigraf/minigraf/issues/277),
+every `bail!`/`anyhow!` call site in the crate has been migrated to a specific
+structured code — `INT-000` is now reserved for the rare case of a raw,
+non-`anyhow` error (e.g. an `io::Error`) reaching the public API boundary
+with no `CodedError` anywhere in its chain.
 
 **Out of scope**: FFI/binding errors from `minigraf-python`, `minigraf-node`, and
 `minigraf-wasm` are handled in those repos.
@@ -151,6 +152,61 @@ category's follow-up migration PR lands, most still surface generically as
 | API-008 | Function registry lock poisoned | Database API |
 | API-009 | WAL not initialized | Database API |
 | INT-000 | Unclassified internal error | Internal |
+| INT-001 | WriteTransaction already in progress on this thread | Internal |
+| INT-002 | Invalid entity (API layer) | Internal |
+| INT-003 | Invalid value (API layer) | Internal |
+| INT-004 | Invalid timestamp | Internal |
+| INT-005 | Millisecond value outside supported datetime range | Internal |
+| INT-006 | Internal parser error: expected token | Internal |
+| INT-007 | Float literal out of range | Internal |
+| INT-008 | Integer literal out of range | Internal |
+| INT-009 | Symbol exceeds maximum length | Internal |
+| INT-010 | Exceeded maximum recursion depth | Internal |
+| INT-011 | Unexpected end of clause | Internal |
+| INT-012 | Duplicate query option | Internal |
+| INT-013 | Query option requires a value | Internal |
+| INT-014 | Query option must be >= 1 | Internal |
+| INT-015 | Query option must be a positive integer | Internal |
+| INT-016 | (or)/(or-join) nested inside (not)/(not-join) | Internal |
+| INT-017 | Pseudo-attribute not valid in this position | Internal |
+| INT-018 | Variable not bound by any outer/earlier clause | Internal |
+| INT-019 | Datalog parser internal error | Internal |
+| INT-020 | Evaluator iteration/result limit exceeded | Internal |
+| INT-021 | Evaluator: unsupported where-clause in evaluate_rule | Internal |
+| INT-022 | Datalog evaluator internal error | Internal |
+| INT-023 | Packed page: fact exceeds slot capacity | Internal |
+| INT-024 | Packed page: malformed page data | Internal |
+| INT-025 | Unsubstituted :valid-at bind slot reached executor | Internal |
+| INT-026 | Temporal pseudo-attributes require :any-valid-time | Internal |
+| INT-027 | Query has no :where clause, rules, or aggregates | Internal |
+| INT-028 | Rule invocation argument count mismatch | Internal |
+| INT-029 | Unknown aggregate function | Internal |
+| INT-030 | Unknown window function | Internal |
+| INT-031 | or-join variable not bound in incoming scope | Internal |
+| INT-032 | Query executor internal error | Internal |
+| INT-033 | Missing bind value for slot | Internal |
+| INT-034 | Bind slot not permitted in attribute position | Internal |
+| INT-035 | Bind slot type mismatch | Internal |
+| INT-036 | Header too short: need N..M bytes | Internal |
+| INT-037 | Header slice not the exact expected byte length | Internal |
+| INT-038 | Header too short for a specific field | Internal |
+| INT-039 | Invalid magic number | Internal |
+| INT-040 | Function/predicate name already registered | Internal |
+| INT-041 | sum: unsupported value type | Internal |
+| INT-042 | min/max: no non-null values in group | Internal |
+| INT-043 | Cannot compare values of different types | Internal |
+| INT-044 | Aggregate: unsupported value type | Internal |
+| INT-045 | Pending fact index out of bounds | Internal |
+| INT-046 | Missing CommittedFactReader for a committed FactRef | Internal |
+| INT-047 | into_backend: backend Arc has multiple owners | Internal |
+| INT-048 | Storage: arithmetic overflow | Internal |
+| INT-049 | Storage: internal invariant violation | Internal |
+| INT-050 | Internal lock poisoned | Internal |
+| INT-051 | Invalid page size | Internal |
+| INT-052 | Page not found | Internal |
+| INT-053 | Header checksum mismatch: possible file corruption | Internal |
+| INT-054 | Unstratifiable negative recursion cycle | Internal |
+| INT-055 | Rule predicate disappeared during rollback | Internal |
 
 ---
 
@@ -2161,40 +2217,696 @@ db.execute("(rule [(ancestor ?x ?y) [?x :parent ?y]])")?;
 
 ## INT — Internal Errors
 
-`INT-000` is the generic catch-all every runtime error falls back to until its
-call site is migrated to a specific structured code — see
-[#277](https://github.com/project-minigraf/minigraf/issues/277). Internal
-errors are invariant violations that should not be reachable through normal
-use of the public API. If you see one of these in practice, it likely
-indicates a bug in Minigraf itself; please
-[file an issue](https://github.com/project-minigraf/minigraf/issues).
+Internal errors are invariant violations or edge cases that are not expected
+to occur through normal use of the public API, or (for a handful of codes
+inherited from before every call site was audited — see
+[#277](https://github.com/project-minigraf/minigraf/issues/277)) genuine
+user-reachable mistakes that were never given a category-specific `PRS-`/
+`QRY-`/`API-` code of their own. If you see one of these in practice and
+cannot explain it from your own input, it likely indicates a bug in
+Minigraf itself; please
+[file an issue](https://github.com/project-minigraf/minigraf/issues) with
+the full error message and the input that triggered it.
+
+Many `INT-` codes below are intentionally shared by several call sites in
+the same subsystem (mirroring how, e.g., `QRY-005`/`QRY-006` already wrap
+an arbitrary underlying failure) — the `{}` placeholder in the "Error text"
+carries the specific underlying detail. This keeps the registry a
+manageable size while still giving every call site a real, matchable code
+instead of falling through to the generic `INT-000` fallback.
 
 ### INT-000 Unclassified internal error
 
 **Error text**: `unclassified internal error: {}`
 
-**Cause**: A `bail!`/`anyhow!` call site has not yet been migrated to a specific structured error code, or the error genuinely is an unreachable internal invariant violation.
+**Cause**: A raw, non-`anyhow` error (e.g. `io::Error`, a panic caught at a
+FFI boundary) reached the public API boundary with no `CodedError` anywhere
+in its `anyhow::Error` chain. As of [#277](https://github.com/project-minigraf/minigraf/issues/277)
+every `bail!`/`anyhow!` call site in the crate has been migrated to a
+specific code, so this should now be rare.
 
 **Resolution**:
 - Read the wrapped message text (the `{}` above) for the underlying cause.
-- Match on message content rather than this code if you need long-term programmatic stability — `INT-000` is expected to cover fewer cases over time as call sites gain specific codes.
+- If you see this in practice, please file an issue — it likely means a new
+  call site was added without going through `bail_coded!`/`err_coded!`.
 
-**Scenario**: Any error not yet covered by a migrated `PRS-`/`STG-`/`WAL-`/`QRY-`/`API-` code.
+**Scenario**: An I/O error from the underlying filesystem propagates through
+`?` without ever being wrapped in a `CodedError`.
 
----
+### INT-001 WriteTransaction already in progress on this thread
 
-## Appendix: Internal Errors
+**Error text**: `a WriteTransaction is already in progress on this thread; use tx.execute() instead`
 
-The following error strings indicate a bug in the Minigraf library itself, not a
-user mistake. If you encounter one, please
-[open a GitHub issue](https://github.com/project-minigraf/minigraf/issues/new)
-with the full error message and the input that triggered it.
+**Cause**: `Minigraf::execute()` or `Minigraf::begin_write()` was called on
+the same thread that already holds an active `WriteTransaction`. Acquiring
+the write lock again on that thread would deadlock, so this is detected and
+rejected instead.
 
-- `internal parser error: expected keyword token`
-- `internal parser error: expected symbol token`
-- `internal parser error: expected string token`
-- `internal parser error: expected integer token`
-- `internal parser error: expected float token`
-- `internal parser error: expected boolean token`
-- `internal parser error: expected tagged literal token`
-- `internal parser error: expected bind slot token`
+**Resolution**:
+- Use the existing `WriteTransaction`'s `tx.execute()` for further writes
+  instead of calling `db.execute()` again on the same thread.
+
+**Scenario**: Code inside a `WriteTransaction` write closure calls
+`db.execute("(transact ...)")` on the outer `db` handle instead of
+`tx.execute(...)`.
+
+### INT-002 Invalid entity (API layer)
+
+**Error text**: `invalid entity: {}`
+
+**Cause**: `Minigraf::materialize_transaction`/`materialize_retraction`
+(the API-layer write path used by `db.execute()` and `WriteTransaction`)
+could not resolve an entity ID in a fact. This mirrors `QRY-001` but fires
+at the API layer's own materialization step, which runs before the WAL
+write for correct WAL-first ordering.
+
+**Resolution**:
+- Ensure entity IDs are UUIDs (`#uuid "..."` tagged literals) or values
+  resolvable to a UUID.
+
+### INT-003 Invalid value (API layer)
+
+**Error text**: `invalid value: {}`
+
+**Cause**: `Minigraf::materialize_transaction`/`materialize_retraction`
+found a fact value of a type Minigraf cannot store. This mirrors `QRY-004`
+but fires at the API layer's own materialization step.
+
+**Resolution**:
+- Use only supported value types: string, integer, float, boolean, UUID
+  ref, or keyword.
+
+### INT-004 Invalid timestamp
+
+**Error text**: `invalid timestamp: {}`
+
+**Cause**: `parse_timestamp` (used for `:as-of`, `:valid-at`, `:valid-from`,
+and `:valid-to` date strings) rejected the input — either a timezone offset
+was present (only UTC `Z` timestamps are supported, to avoid chrono's local
+timezone handling, GHSA-wcg3-cvx6-7396), or the string did not parse as an
+RFC 3339 datetime or `YYYY-MM-DD` date.
+
+**Resolution**:
+- Use a UTC timestamp like `"2024-01-15T10:00:00Z"` or a bare date like
+  `"2024-01-15"`. Do not include a timezone offset such as `+05:30`.
+
+### INT-005 Millisecond value outside supported datetime range
+
+**Error text**: `millisecond value {} is outside the supported datetime range`
+
+**Cause**: `millis_to_timestamp_string` was given a millisecond value
+outside the range chrono can represent as a UTC datetime. `i64::MAX`
+(`VALID_TIME_FOREVER`) must never be passed to this function directly —
+callers should check for the sentinel before formatting.
+
+**Resolution**:
+- Check for `VALID_TIME_FOREVER` before formatting a `valid_to` value.
+
+### INT-006 Internal parser error: expected token
+
+**Error text**: `internal parser error: expected {} token`
+
+**Cause**: The Datalog/EDN parser's second pass expected a specific
+lexer-token kind (keyword, symbol, string, integer, float, boolean, tagged
+literal, or bind slot) at a position the first pass had already validated
+would hold that kind. This indicates the parser's two passes have gone out
+of sync — a bug in Minigraf, not a user mistake.
+
+**Resolution**:
+- File a bug report with the exact input string that triggered this error.
+
+### INT-007 Float literal out of range
+
+**Error text**: `Float literal out of range: {}`
+
+**Cause**: A numeric literal in the input parsed as a float token but
+overflowed Rust's `f64` range during conversion.
+
+**Resolution**:
+- Use a value within `f64`'s representable range.
+
+### INT-008 Integer literal out of range
+
+**Error text**: `Integer literal out of range: {}`
+
+**Cause**: A numeric literal in the input parsed as an integer token but
+overflowed Rust's `i64` range during conversion.
+
+**Resolution**:
+- Use a value within `i64`'s representable range (roughly ±9.2×10¹⁸).
+
+### INT-009 Symbol exceeds maximum length
+
+**Error text**: `Symbol exceeds maximum length of {} bytes`
+
+**Cause**: A Datalog symbol (variable name, predicate name, etc.) exceeded
+the parser's maximum symbol length.
+
+**Resolution**:
+- Shorten the symbol name.
+
+### INT-010 Exceeded maximum recursion depth
+
+**Error text**: `Exceeded maximum recursion depth of {}`
+
+**Cause**: The input's nested list/vector structure exceeded the parser's
+maximum recursion depth — a guard against stack overflow on deeply nested
+or adversarial input.
+
+**Resolution**:
+- Flatten the query structure; deeply nested `(and ...)`/`(or ...)` forms
+  are rarely necessary.
+
+### INT-011 Unexpected end of clause
+
+**Error text**: `unexpected end of {}`
+
+**Cause**: The parser reached the end of the input while still expecting
+more elements inside a clause (e.g. `:over`, a query vector, an expression
+clause, `not`/`not-join`/`or`/`or-join`, a rule invocation, or `and`). The
+`{}` names which clause was left incomplete.
+
+**Resolution**:
+- Check the input for a missing closing `]`/`)` or a truncated clause.
+
+### INT-012 Duplicate query option
+
+**Error text**: `duplicate {}`
+
+**Cause**: A query specified the same top-level option (`:max-derived-facts`
+or `:max-results`) more than once.
+
+**Resolution**:
+- Specify each query option at most once.
+
+### INT-013 Query option requires a value
+
+**Error text**: `{} requires a value`
+
+**Cause**: A query option keyword (`:max-derived-facts` or `:max-results`)
+was present with no following value.
+
+**Resolution**:
+- Supply a positive integer value after the option keyword.
+
+### INT-014 Query option must be >= 1
+
+**Error text**: `{} must be >= 1`
+
+**Cause**: `:max-derived-facts` or `:max-results` was given a value less
+than 1.
+
+**Resolution**:
+- Use a value of 1 or greater.
+
+### INT-015 Query option must be a positive integer
+
+**Error text**: `{} must be a positive integer`
+
+**Cause**: `:max-derived-facts` or `:max-results` was given a non-integer
+value.
+
+**Resolution**:
+- Supply a positive integer literal.
+
+### INT-016 (or)/(or-join) nested inside (not)/(not-join)
+
+**Error text**: `(or)/(or-join) cannot appear inside (not)/(not-join)`
+
+**Cause**: A `(not ...)` or `(not-join ...)` clause's body contained a
+nested `(or ...)`/`(or-join ...)`, which is not supported.
+
+**Resolution**:
+- Restructure the query to avoid nesting `or`/`or-join` inside negation.
+
+### INT-017 Pseudo-attribute not valid in this position
+
+**Error text**: `pseudo-attribute {} is not valid in {} position`
+
+**Cause**: A pseudo-attribute (e.g. `:db/valid-from`) was used in the
+entity or value position of a pattern, where only real attributes and
+plain values are permitted.
+
+**Resolution**:
+- Use pseudo-attributes only in the attribute position of a pattern.
+
+### INT-018 Variable not bound by any outer/earlier clause
+
+**Error text**: `{} {} in {} is not bound by any {} clause`
+
+**Cause**: A variable referenced inside `(not ...)`, `(not-join ...)`, an
+expression clause, or `(or-join ...)` was never bound by an outer or
+earlier clause in the query.
+
+**Resolution**:
+- Ensure every variable used inside negation, expressions, or `or-join`
+  also appears in a preceding pattern that binds it.
+
+### INT-019 Datalog parser internal error
+
+**Error text**: `datalog parser: {}`
+
+**Cause**: A shared catch-all for the parser's remaining long-tail syntax
+and structural errors (malformed `:with`/`:find` clauses, malformed
+fact/rule/pattern vectors, invalid regex literals in `matches?`, and
+similar). The `{}` carries the specific underlying message.
+
+**Resolution**:
+- Read the wrapped message text for the specific syntax problem and correct
+  the input accordingly.
+
+### INT-020 Evaluator iteration/result limit exceeded
+
+**Error text**: `evaluator: iteration or result limit exceeded: {}`
+
+**Cause**: The recursive rule evaluator (semi-naive evaluation) exceeded its
+maximum iteration count, maximum derived facts per iteration, or maximum
+query result count — guards against infinite recursion/cycles or
+runaway-generating rules.
+
+**Resolution**:
+- Check the rule for an unintended cycle (e.g. `(ancestor ?x ?y) [?x
+  :parent ?y]` combined with a cyclic `:parent` graph). Raise the relevant
+  limit via query options if the workload is legitimately large.
+
+### INT-021 Evaluator: unsupported where-clause in evaluate_rule
+
+**Error text**: `evaluator: unsupported where-clause in evaluate_rule: {}`
+
+**Cause**: A rule body contained a `not`, `not-join`, `or`, or `or-join`
+clause, but was evaluated through the non-stratified `RecursiveEvaluator`
+instead of `StratifiedEvaluator`, which is required for rules with
+negation/disjunction. This indicates an internal dispatch bug — the
+executor should route negation-containing rules to the stratified
+evaluator.
+
+**Resolution**:
+- File a bug report with the rule definition that triggered this error.
+
+### INT-022 Datalog evaluator internal error
+
+**Error text**: `datalog evaluator: {}`
+
+**Cause**: A shared catch-all for the recursive rule evaluator's remaining
+internal invariant checks around rule invocation/head parsing (e.g. a rule
+invocation or head with an unexpected shape, an unbound variable in a rule
+head, or a window-function row-index bound check). These conditions should
+already be rejected by the parser and are not expected to reach the
+evaluator through normal use.
+
+**Resolution**:
+- File a bug report with the rule/query that triggered this error.
+
+### INT-023 Packed page: fact exceeds slot capacity
+
+**Error text**: `packed page: fact record exceeds slot capacity: {}`
+
+**Cause**: A fact's postcard-encoded size exceeds the maximum a packed fact
+page slot can hold.
+
+**Resolution**:
+- Store large payloads externally and reference them with a `Value::String`
+  URL/path or `Value::Ref` entity ID, the same guidance as `WAL-003`.
+
+### INT-024 Packed page: malformed page data
+
+**Error text**: `packed page: malformed page data: {}`
+
+**Cause**: A shared catch-all for packed-fact-page invariant violations —
+a page shorter than expected, a directory entry or record slice out of
+bounds, or an offset/length computation that would overflow. These
+indicate on-disk corruption or a bug in the packed-page encoder, not a
+user mistake.
+
+**Resolution**:
+- If this occurs on a database file that was not modified outside
+  Minigraf, please file a bug report with the file (or a minimal
+  reproduction) attached.
+
+### INT-025 Unsubstituted :valid-at bind slot reached executor
+
+**Error text**: `internal: unsubstituted :valid-at bind slot reached the executor`
+
+**Cause**: A prepared query's `:valid-at` clause still contained an
+unresolved `$slot` bind placeholder when it reached the query executor.
+`PreparedQuery::execute` is expected to substitute all bind slots before
+handing the query to the executor.
+
+**Resolution**:
+- File a bug report — this indicates a gap in `PreparedQuery`'s bind-slot
+  substitution.
+
+### INT-026 Temporal pseudo-attributes require :any-valid-time
+
+**Error text**: `temporal pseudo-attributes :db/valid-from, :db/valid-to, :db/tx-count, and :db/tx-id require :any-valid-time; add :any-valid-time to your query`
+
+**Cause**: A query referenced a temporal pseudo-attribute (`:db/valid-from`,
+`:db/valid-to`, `:db/tx-count`, `:db/tx-id`) without also specifying
+`:valid-at :any-valid-time`. These pseudo-attributes expose per-fact
+temporal metadata that only makes sense when the query is not filtering to
+a single point in valid time.
+
+**Resolution**:
+- Add `:valid-at :any-valid-time` to the query.
+
+### INT-027 Query has no :where clause, rules, or aggregates
+
+**Error text**: `query has no :where clause, rules, or aggregates — nothing binds the variables. Add a :where clause (e.g., [:find ?e ?a ?v :where [?e ?a ?v]]) or use an aggregate.`
+
+**Cause**: A `(query ...)` command's `:find` variables have nothing to
+bind them — no `:where` clause, no rule invocation, and no aggregate.
+
+**Resolution**:
+- Add a `:where` clause that binds every variable in `:find`.
+
+### INT-028 Rule invocation argument count mismatch
+
+**Error text**: `Rule invocation '{}' must have 1 or 2 arguments, got {}`
+
+**Cause**: A rule was invoked with an argument count other than 1 (entity
+only) or 2 (entity and value). Minigraf's rule invocations only support
+these two arities.
+
+**Resolution**:
+- Invoke the rule with 1 or 2 arguments, matching its definition.
+
+### INT-029 Unknown aggregate function
+
+**Error text**: `unknown aggregate function: '{}'`
+
+**Cause**: A `:find` or `:with` clause referenced an aggregate function
+name that is neither a built-in (`count`, `sum`, `avg`, `min`, `max`, etc.)
+nor a user-defined function registered via `db.register_aggregate()`.
+
+**Resolution**:
+- Check the function name for typos, or register it first with
+  `db.register_aggregate()`.
+
+### INT-030 Unknown window function
+
+**Error text**: `unknown window function '{}' — register it with register_aggregate() before querying`
+
+**Cause**: An `:over` (window) clause referenced a function name that is
+not a recognized window-compatible built-in and has not been registered.
+
+**Resolution**:
+- Register the function with `db.register_aggregate()` before using it in
+  an `:over` clause.
+
+### INT-031 or-join variable not bound in incoming scope
+
+**Error text**: `or-join variable {} is not bound in the incoming scope`
+
+**Cause**: An `(or-join [vars] ...)` clause's declared join variable was
+not actually bound in the scope the `or-join` was evaluated in.
+
+**Resolution**:
+- Ensure every variable listed in `or-join`'s join-vars vector is bound by
+  a clause preceding it in the query.
+
+### INT-032 Query executor internal error
+
+**Error text**: `query executor: {}`
+
+**Cause**: A shared catch-all for a handful of query executor invariant
+checks that are not expected to be user-reachable (an empty rule head
+reaching execution, a rule head not starting with a predicate symbol, or a
+window function's row-number position overflowing).
+
+**Resolution**:
+- File a bug report with the query that triggered this error.
+
+### INT-033 Missing bind value for slot
+
+**Error text**: `missing bind value for slot '${}'`
+
+**Cause**: `PreparedQuery::execute()` was called without supplying a bind
+value for every `$slot` the prepared query declared.
+
+**Resolution**:
+- Supply a `BindValue` for every named slot before calling `execute()`.
+
+### INT-034 Bind slot not permitted in attribute position
+
+**Error text**: `bind slot '${}' is not permitted in attribute position; the query optimizer selects an index based on the attribute at prepare time and cannot handle a parameterised attribute`
+
+**Cause**: A `$slot` bind placeholder appeared in the attribute position of
+a pattern in a prepared query. The query optimizer picks an index (EAVT,
+AEVT, AVET, VAET) based on the attribute at `prepare()` time, which is not
+possible if the attribute itself is a runtime-bound parameter.
+
+**Resolution**:
+- Use a literal attribute keyword in patterns; reserve bind slots for the
+  entity or value position.
+
+### INT-035 Bind slot type mismatch
+
+**Error text**: `slot '${}' in {} position requires {}, got {}`
+
+**Cause**: A bind value supplied to `PreparedQuery::execute()` was of the
+wrong `BindValue` variant for the position its slot appears in (entity
+position requires `Entity`, value/expression position requires `Val`,
+`:as-of` position requires `TxCount` or `Timestamp`, `:valid-at` position
+requires `Timestamp` or `AnyValidTime`).
+
+**Resolution**:
+- Supply a `BindValue` of the variant the slot's position requires.
+
+### INT-036 Header too short: need N..M bytes
+
+**Error text**: `header too short: need {}..{}, got {} bytes`
+
+**Cause**: A file-header field read (a 4-byte or 8-byte fixed-width field)
+extended past the end of the available header bytes.
+
+**Resolution**:
+- The file is likely truncated or corrupted. Restore from a backup.
+
+### INT-037 Header slice not the exact expected byte length
+
+**Error text**: `header: slice at {} not exactly {} bytes`
+
+**Cause**: An internal invariant check found a header field slice that was
+not exactly the expected width (4 or 8 bytes) after a bounds check that
+should have guaranteed it. Indicates a bug in the header-parsing slicing
+logic.
+
+**Resolution**:
+- File a bug report with the file header bytes attached.
+
+### INT-038 Header too short for a specific field
+
+**Error text**: `header too short for {}`
+
+**Cause**: The v7 header parser ran out of bytes while reading a specific
+field (the magic bytes, `fact_page_format`, or one of the reserved padding
+bytes).
+
+**Resolution**:
+- The file is likely truncated or corrupted. Restore from a backup.
+
+### INT-039 Invalid magic number
+
+**Error text**: `Invalid magic number`
+
+**Cause**: A legacy-format header parsing path found a magic number that
+does not match `"MGRF"`. This mirrors `STG-002` but fires on a different
+internal parsing path.
+
+**Resolution**:
+- The file is not a Minigraf `.graph` file, or is corrupted.
+
+### INT-040 Function/predicate name already registered
+
+**Error text**: `{} '{}' is already registered`
+
+**Cause**: `db.register_aggregate()` or `db.register_predicate()` was
+called with a name that is already registered — either a built-in or a
+previously registered user-defined function.
+
+**Resolution**:
+- Choose a unique name, or only register the function once.
+
+### INT-041 sum: unsupported value type
+
+**Error text**: `sum: expected Integer, Float, or Null, got {}`
+
+**Cause**: The built-in `sum` aggregate encountered a value in its input
+group that is not an `Integer`, `Float`, or `Null`.
+
+**Resolution**:
+- Ensure the attribute being summed only ever holds numeric or null
+  values.
+
+### INT-042 min/max: no non-null values in group
+
+**Error text**: `min/max: no non-null values in group`
+
+**Cause**: The built-in `min`/`max` aggregate was applied to a group whose
+values were all `Null`, leaving nothing to compare.
+
+**Resolution**:
+- Filter out rows with a null value before aggregating, or handle the
+  all-null-group case in your query.
+
+### INT-043 Cannot compare values of different types
+
+**Error text**: `{}: cannot compare {} and {} values`
+
+**Cause**: An aggregate that orders values (`min`, `max`) encountered two
+values of different, non-comparable `Value` types within the same group.
+
+**Resolution**:
+- Ensure the attribute being aggregated holds a consistent value type
+  across all matching facts.
+
+### INT-044 Aggregate: unsupported value type
+
+**Error text**: `{}: expected Integer, Float, String, or Null, got {}`
+
+**Cause**: An aggregate that requires an orderable scalar type (e.g. `min`,
+`max`) encountered a value type it does not support (such as a `Boolean`
+or `Ref`).
+
+**Resolution**:
+- Ensure the aggregated attribute only holds Integer, Float, String, or
+  Null values.
+
+### INT-045 Pending fact index out of bounds
+
+**Error text**: `pending fact index {} out of bounds`
+
+**Cause**: A `FactRef` pointed at a pending (not-yet-committed) fact slot
+index that no longer exists in the pending fact buffer.
+
+**Resolution**:
+- File a bug report — this indicates a lifecycle bug between fact
+  materialization and lookup.
+
+### INT-046 Missing CommittedFactReader for a committed FactRef
+
+**Error text**: `no CommittedFactReader but got committed FactRef (page_id={})`
+
+**Cause**: A `FactRef` pointing at a committed (on-disk) fact was resolved
+without a `CommittedFactReader` configured to read it.
+
+**Resolution**:
+- File a bug report — this indicates the storage backend was constructed
+  without the reader it needs for the facts it is indexing.
+
+### INT-047 into_backend: backend Arc has multiple owners
+
+**Error text**: `into_backend: backend Arc has multiple owners`
+
+**Cause**: `PersistentFactStorage::into_backend()` requires exclusive
+ownership of its internal `Arc<Mutex<Backend>>` to unwrap it, but another
+clone of the `Arc` was still alive when it was called.
+
+**Resolution**:
+- Ensure no other handle (e.g. a second `Minigraf` clone) is holding a
+  reference to the same backend when converting it back into a raw
+  backend.
+
+### INT-048 Storage: arithmetic overflow
+
+**Error text**: `storage: arithmetic overflow: {}`
+
+**Cause**: A shared catch-all for arithmetic-overflow guards throughout the
+storage layer (B+tree page/entry-length computations, page-count/page-id
+arithmetic, packed-page offset arithmetic) — a checked or `saturating_*`
+computation would have overflowed its target integer width. Only reachable
+on databases far larger than any realistic deployment.
+
+**Resolution**:
+- File a bug report if this occurs on a database of reasonable size — it
+  likely indicates a corrupt page count or index in the file header.
+
+### INT-049 Storage: internal invariant violation
+
+**Error text**: `storage: internal invariant violation: {}`
+
+**Cause**: A shared catch-all for storage-layer invariant violations —
+malformed or corrupted B+tree/packed-fact page bytes, an out-of-bounds
+page/entry index, an unexpected page type where a specific type was
+required, or an "impossible" empty internal structure (e.g. `BUG:
+cur_first_key empty when writing leaf page`). These indicate either
+on-disk corruption or a bug in Minigraf's B+tree/page-encoding logic.
+
+**Resolution**:
+- If this occurs on a database file that was not modified outside
+  Minigraf, please file a bug report with the file (or a minimal
+  reproduction) attached.
+
+### INT-050 Internal lock poisoned
+
+**Error text**: `{} lock poisoned`
+
+**Cause**: One of Minigraf's internal `Mutex`/`RwLock` guards (the shared
+fact-storage data lock, the page cache lock, the in-memory backend's page
+table lock, or the on-disk `MutexStorageBackend`'s lock) was poisoned by a
+previous operation panicking while holding it.
+
+**Resolution**:
+- Restart the process. If panics recur, investigate the root cause before
+  retrying — a poisoned lock is permanent for the life of the process.
+
+### INT-051 Invalid page size
+
+**Error text**: `Invalid page size: {} bytes (expected {})`
+
+**Cause**: A page passed to a storage backend's `write_page` was not
+exactly `PAGE_SIZE` (4096) bytes.
+
+**Resolution**:
+- This is an internal contract violation between the storage layer and its
+  backend, not a user mistake. File a bug report.
+
+### INT-052 Page not found
+
+**Error text**: `Page {} not found`
+
+**Cause**: A storage backend was asked to read a page ID that does not
+exist in its page table (in-memory or browser IndexedDB-backed backends).
+
+**Resolution**:
+- File a bug report — this indicates a page was referenced (e.g. by a
+  B+tree pointer) without having first been written.
+
+### INT-053 Header checksum mismatch: possible file corruption
+
+**Error text**: `Header checksum mismatch: possible file corruption. Database may be damaged.`
+
+**Cause**: The v7 file header's stored checksum does not match a freshly
+computed checksum of the header bytes — the header was modified outside
+Minigraf, corrupted by a partial write, or damaged by the underlying
+storage medium.
+
+**Resolution**:
+- Restore the database file from a backup. If the file was open at the
+  time of a crash, check for a `.wal` sidecar next to it — replaying it on
+  the last-known-good copy may recover recent writes.
+
+### INT-054 Unstratifiable negative recursion cycle
+
+**Error text**: `unstratifiable: predicate '{}' is involved in a negative cycle through '{}'`
+
+**Cause**: A set of rules contains a predicate that depends negatively
+(through `not`/`not-join`) on itself, directly or transitively — this has
+no well-defined semantics under stratified negation and cannot be
+evaluated.
+
+**Resolution**:
+- Restructure the rules so that no predicate's definition negatively
+  depends on itself, even indirectly through other rules.
+
+### INT-055 Rule predicate disappeared during rollback
+
+**Error text**: `rule predicate '{}' disappeared during rollback`
+
+**Cause**: `WriteTransaction::rollback()` (or an implicit rollback on
+drop) attempted to remove a rule that had been staged for registration in
+this transaction, but the rule registry no longer contained it.
+
+**Resolution**:
+- File a bug report — this indicates a lifecycle bug in
+  `WriteTransaction`'s rule-staging/rollback logic.

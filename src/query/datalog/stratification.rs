@@ -1,3 +1,4 @@
+use crate::error::{ErrorCode, err_coded};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -94,11 +95,7 @@ impl DependencyGraph {
                     }
                     // Cycle detection: stratum >= n means unstratifiable
                     if *strata.get(head).unwrap_or(&0) >= n {
-                        return Err(anyhow::anyhow!(
-                            "unstratifiable: predicate '{}' is involved in a negative cycle through '{}'",
-                            head,
-                            dep
-                        ));
+                        return Err(err_coded!(ErrorCode::Int054, head.clone(), dep.clone()));
                     }
                 }
             }

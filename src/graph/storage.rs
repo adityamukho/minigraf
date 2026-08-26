@@ -1,3 +1,4 @@
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::graph::types::{
     Attribute, EntityId, Fact, TransactOptions, TxId, VALID_TIME_FOREVER, Value, tx_id_now,
 };
@@ -154,7 +155,7 @@ impl FactStorage {
         let mut d = self
             .data
             .write()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
         for (slot, fact) in (u16::try_from(d.facts.len()).unwrap_or(u16::MAX)..).zip(facts.iter()) {
             d.pending_keys.insert(pending_key(fact));
             d.pending_indexes.insert(
@@ -213,7 +214,7 @@ impl FactStorage {
         let mut d = self
             .data
             .write()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
         for (slot, fact) in (u16::try_from(d.facts.len()).unwrap_or(u16::MAX)..).zip(facts.iter()) {
             d.pending_keys.insert(pending_key(fact));
             d.pending_indexes.insert(
@@ -262,7 +263,7 @@ impl FactStorage {
         let mut d = self
             .data
             .write()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
         for (slot, fact) in
             (u16::try_from(d.facts.len()).unwrap_or(u16::MAX)..).zip(retractions.iter())
         {
@@ -292,7 +293,7 @@ impl FactStorage {
         let mut d = self
             .data
             .write()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
 
         // O(1) duplicate check via the pending_keys HashSet.
         // Previously this was an O(n) linear scan over d.facts, causing O(n²)
@@ -322,7 +323,7 @@ impl FactStorage {
         let d = self
             .data
             .read()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
         let max = d.facts.iter().map(|f| f.tx_count).max().unwrap_or(0);
         self.tx_counter.store(max, Ordering::SeqCst);
         Ok(())
@@ -354,7 +355,7 @@ impl FactStorage {
         let d = self
             .data
             .read()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
         let mut all = Vec::new();
         // Committed facts first (on disk, via CommittedFactReader)
         if let Some(loader) = &d.committed {
@@ -388,7 +389,7 @@ impl FactStorage {
         let mut d = self
             .data
             .write()
-            .map_err(|_| anyhow::anyhow!("data lock poisoned"))?;
+            .map_err(|_| err_coded!(ErrorCode::Int050, "data"))?;
         d.facts.clear();
         d.pending_keys.clear();
         d.pending_indexes = Indexes::new();
@@ -587,14 +588,11 @@ fn resolve_fact_ref(d: &FactData, fr: FactRef) -> Result<Fact> {
         d.facts
             .get(fr.slot_index as usize)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("pending fact index {} out of bounds", fr.slot_index))
+            .ok_or_else(|| err_coded!(ErrorCode::Int045, fr.slot_index))
     } else {
         match &d.committed {
             Some(loader) => loader.resolve(fr),
-            None => anyhow::bail!(
-                "no CommittedFactReader but got committed FactRef (page_id={})",
-                fr.page_id
-            ),
+            None => bail_coded!(ErrorCode::Int046, fr.page_id),
         }
     }
 }

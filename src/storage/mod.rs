@@ -13,7 +13,7 @@ pub mod index;
 pub mod packed_pages;
 pub mod persistent_facts;
 
-use crate::error::{ErrorCode, bail_coded};
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use anyhow::Result;
 
 /// Read a 4-byte little-endian u32 from `bytes` at `offset`.
@@ -21,16 +21,9 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> anyhow::Result<u32> {
     Ok(u32::from_le_bytes(
         bytes
             .get(offset..offset + 4)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "header too short: need {}..{}, got {} bytes",
-                    offset,
-                    offset + 4,
-                    bytes.len()
-                )
-            })?
+            .ok_or_else(|| err_coded!(ErrorCode::Int036, offset, offset + 4, bytes.len()))?
             .try_into()
-            .map_err(|_| anyhow::anyhow!("header: slice at {offset} not exactly 4 bytes"))?,
+            .map_err(|_| err_coded!(ErrorCode::Int037, offset, 4))?,
     ))
 }
 
@@ -39,16 +32,9 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> anyhow::Result<u64> {
     Ok(u64::from_le_bytes(
         bytes
             .get(offset..offset + 8)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "header too short: need {}..{}, got {} bytes",
-                    offset,
-                    offset + 8,
-                    bytes.len()
-                )
-            })?
+            .ok_or_else(|| err_coded!(ErrorCode::Int036, offset, offset + 8, bytes.len()))?
             .try_into()
-            .map_err(|_| anyhow::anyhow!("header: slice at {offset} not exactly 8 bytes"))?,
+            .map_err(|_| err_coded!(ErrorCode::Int037, offset, 8))?,
     ))
 }
 
@@ -208,7 +194,7 @@ impl FileHeader {
         magic.copy_from_slice(
             bytes
                 .get(0..4)
-                .ok_or_else(|| anyhow::anyhow!("header too short for magic bytes"))?,
+                .ok_or_else(|| err_coded!(ErrorCode::Int038, "magic bytes"))?,
         );
 
         if magic != MAGIC_NUMBER {
@@ -277,17 +263,17 @@ impl FileHeader {
             index_checksum: read_u32_le(bytes, 64)?,
             fact_page_format: *bytes
                 .get(68)
-                .ok_or_else(|| anyhow::anyhow!("header too short for fact_page_format"))?,
+                .ok_or_else(|| err_coded!(ErrorCode::Int038, "fact_page_format"))?,
             _padding: [
                 *bytes
                     .get(69)
-                    .ok_or_else(|| anyhow::anyhow!("header too short for padding[0]"))?,
+                    .ok_or_else(|| err_coded!(ErrorCode::Int038, "padding[0]"))?,
                 *bytes
                     .get(70)
-                    .ok_or_else(|| anyhow::anyhow!("header too short for padding[1]"))?,
+                    .ok_or_else(|| err_coded!(ErrorCode::Int038, "padding[1]"))?,
                 *bytes
                     .get(71)
-                    .ok_or_else(|| anyhow::anyhow!("header too short for padding[2]"))?,
+                    .ok_or_else(|| err_coded!(ErrorCode::Int038, "padding[2]"))?,
             ],
             fact_page_count,
             header_checksum,
@@ -297,7 +283,7 @@ impl FileHeader {
     /// Validate the header.
     pub fn validate(&self) -> Result<()> {
         if self.magic != MAGIC_NUMBER {
-            anyhow::bail!("Invalid magic number");
+            bail_coded!(ErrorCode::Int039);
         }
         if self.version < 1 || self.version > FORMAT_VERSION {
             bail_coded!(ErrorCode::Stg006, self.version, FORMAT_VERSION);

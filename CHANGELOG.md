@@ -185,6 +185,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pre-#277 baseline, which no further micro-optimization of already-maxed
   settings can absorb. ~1.2MB keeps meaningful headroom above that projection
   without abandoning the philosophy's small-binary principle.
+- **Every remaining `bail!`/`anyhow!` call site in the crate now carries a
+  structured code — nothing falls through to `INT-000` by default anymore**
+  (#362, #277 step 6/6, the final sub-PR of the umbrella issue). Two parts:
+
+  **Part 1 — `src/db.rs`'s API-layer call sites now carry their real
+  `API-0xx` codes**: `API-001` write lock poisoned (`execute`/`begin_write`/
+  `checkpoint`), `API-002` unexpected command variant in the write path
+  (structurally unreachable — kept for defensive completeness, no test
+  possible), `API-003`/`API-004` attribute-must-be-keyword /
+  cannot-transact-a-pseudo-attribute at the `materialize_transaction`/
+  `materialize_retraction` layer (mirroring `QRY-002`/`QRY-003`), `API-005`/
+  `API-006`/`API-007` `db.prepare()` rejecting `transact`/`retract`/`rule`,
+  `API-008` function registry lock poisoned (`register_aggregate`/
+  `register_predicate`), `API-009` WAL not initialized (also structurally
+  unreachable — `wal_write_stamped_batch` always populates `wal` two lines
+  above the `ok_or_else`). Regression tests assert the exact code for every
+  reachable one, including two new lock-poisoning tests that deliberately
+  panic while holding `write_lock`/`functions` (via `catch_unwind`) to
+  exercise `API-001`/`API-008` for real rather than by inspection.
+  `db.rs`'s own "invalid entity"/"invalid value" checks in
+  `materialize_transaction`/`materialize_retraction` have no `API-0xx`
+  counterpart in `docs/ERROR_REFERENCE.md` (only `QRY-001`/`QRY-004` do, and
+  those cover a different, unreachable-from-`db.rs` call path — see the QRY
+  entry above) and a `WriteTransaction`-already-active reentrancy check has
+  no documented code at all, so all three became new `INT-0xx` codes
+  (`INT-001`, `INT-002`, `INT-003`) — part of the audit below.
+
+  **Part 2 — every other uncoded `bail!`/`anyhow!` site crate-wide
+  (~250 of them, across 18 files: `temporal.rs`, `parser.rs`'s long-tail
+  internal-error/syntax branches the PRS migration left uncoded,
+  `evaluator.rs`, `executor.rs`'s remaining sites, `prepared.rs`,
+  `functions.rs`, `rules.rs`, `stratification.rs`, `graph/storage.rs`,
+  `storage/mod.rs`, `storage/persistent_facts.rs`, `storage/packed_pages.rs`,
+  `storage/btree.rs`, `storage/btree_v6.rs`,
+  `storage/backend/{file,memory}.rs`, `storage/cache.rs`,
+  `browser/buffer.rs`) — assigned one of 52 new `INT-0xx` codes**
+  (`INT-004`–`INT-055`; `docs/ERROR_REFERENCE.md`'s old "Appendix: Internal
+  Errors" bullet list is gone, replaced by `INT-006`'s formal entry, which
+  covers the same 8 "internal parser error: expected X token" strings via a
+  `{}` placeholder). Mechanically-repeated call sites share one
+  parameterised code rather than getting one each — mirroring the pattern
+  `QRY-005`/`STG-016`/`WAL-006` already established for "wrap an arbitrary
+  underlying cause" and "one poisoned-lock code per resource": e.g. `INT-011`
+  covers all ten "unexpected end of `<clause>`" parser messages, `INT-018`
+  covers all four "variable not bound by any outer/earlier clause" messages,
+  `INT-050` covers all thirteen lock-poisoned sites across four files
+  (`{}` names the specific lock), and `INT-048`/`INT-049` are broad
+  "storage: arithmetic overflow"/"storage: internal invariant violation"
+  buckets covering dozens of B+tree/packed-page bounds-check and
+  overflow-guard sites that were never meaningfully distinct from one
+  another. A handful of genuinely user-reachable conditions that
+  the original five category PRs simply never got to — the recursion/
+  derived-facts/result-limit family in `evaluator.rs` (`INT-020`) and the
+  runtime aggregate type-mismatch family in `functions.rs` (`INT-041`–
+  `INT-044`) among them — are `INT-0xx` rather than `QRY-0xx` purely because
+  this PR's scope is "assign every remaining site an `INT` code," not
+  "reopen the closed PRS/QRY/STG/WAL category PRs to extend their code
+  ranges"; two existing regression tests in `tests/error_codes_qry_test.rs`
+  that had locked in `INT-000` for exactly these two families before this PR
+  (`recursive_rule_derived_facts_limit_returns_int000`,
+  `aggregate_type_mismatch_returns_int000`) were updated in place to assert
+  their new codes instead, and two similarly-named unit tests in
+  `src/query/datalog/evaluator.rs` were fixed the same way.
+- **The `REGISTRY`↔`docs/ERROR_REFERENCE.md` sync test is now a full
+  bidirectional equality check** (#362, #277 step 6/6), replacing the
+  subset-only check the foundation PR (#357) introduced. Renamed
+  `registry_is_a_subset_of_error_reference_doc` →
+  `registry_matches_error_reference_doc_bidirectionally`: it now also
+  asserts every documented `### CODE` section with an "Error text" line has
+  a matching `REGISTRY` row, not just the reverse. This is only safe now
+  that Part 2 above means no documented code can be missing a registry
+  entry because its call site hasn't been migrated yet — the last such gap
+  is closed. The final tally: 122 pre-#362 `ErrorCode` variants (`PRS`×79,
+  `QRY`×9, `STG`×27, `WAL`×6, `INT-000`×1) plus 9 new `API-0xx` and 55 new
+  `INT-0xx` (`INT-001`–`INT-055`) = 186 total.
 
 ### Bug fixes
 

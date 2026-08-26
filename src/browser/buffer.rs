@@ -1,3 +1,4 @@
+use crate::error::{ErrorCode, bail_coded, err_coded};
 use crate::storage::{PAGE_SIZE, StorageBackend};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -65,11 +66,7 @@ impl BrowserBufferBackend {
 impl StorageBackend for BrowserBufferBackend {
     fn write_page(&mut self, page_id: u64, data: &[u8]) -> Result<()> {
         if data.len() != PAGE_SIZE {
-            anyhow::bail!(
-                "Invalid page size: {} bytes (expected {})",
-                data.len(),
-                PAGE_SIZE
-            );
+            bail_coded!(ErrorCode::Int051, data.len(), PAGE_SIZE);
         }
         self.pages.insert(page_id, data.to_vec());
         self.dirty.insert(page_id);
@@ -80,7 +77,7 @@ impl StorageBackend for BrowserBufferBackend {
         self.pages
             .get(&page_id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Page {} not found", page_id))
+            .ok_or_else(|| err_coded!(ErrorCode::Int052, page_id))
     }
 
     fn sync(&mut self) -> Result<()> {
