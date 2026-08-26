@@ -316,7 +316,10 @@ pub fn build_btree(
             leaf_infos
                 .first()
                 .ok_or_else(|| {
-                    err_coded!(ErrorCode::Int049, "leaf_infos unexpectedly empty".to_string())
+                    err_coded!(
+                        ErrorCode::Int049,
+                        "leaf_infos unexpectedly empty".to_string()
+                    )
                 })?
                 .0,
             next_page,
