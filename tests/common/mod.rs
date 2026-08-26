@@ -107,10 +107,7 @@ fn crash_child_entrypoint() {
 
     let db = Minigraf::open_with_options(
         &db_path,
-        OpenOptions {
-            wal_checkpoint_threshold: threshold,
-            ..Default::default()
-        },
+        OpenOptions::default().wal_checkpoint_threshold(threshold),
     )
     .expect("child opens db");
 

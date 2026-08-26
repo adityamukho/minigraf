@@ -20,10 +20,7 @@ use std::io::Write;
 /// after closing the handle. `wal_checkpoint_threshold: usize::MAX` is the
 /// documented sentinel that suppresses all checkpointing, including on drop.
 fn no_checkpoint_options() -> OpenOptions {
-    OpenOptions {
-        wal_checkpoint_threshold: usize::MAX,
-        ..OpenOptions::default()
-    }
+    OpenOptions::default().wal_checkpoint_threshold(usize::MAX)
 }
 
 fn wal_path_for(db_path: &std::path::Path) -> std::path::PathBuf {

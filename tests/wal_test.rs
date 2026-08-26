@@ -202,10 +202,7 @@ fn test_manual_checkpoint_deletes_wal() {
 
     let db = Minigraf::open_with_options(
         &db_path,
-        OpenOptions {
-            wal_checkpoint_threshold: usize::MAX,
-            ..Default::default()
-        },
+        OpenOptions::default().wal_checkpoint_threshold(usize::MAX),
     )
     .unwrap();
 
@@ -291,10 +288,7 @@ fn test_auto_checkpoint_fires_at_threshold() {
     {
         let db = Minigraf::open_with_options(
             &db_path,
-            OpenOptions {
-                wal_checkpoint_threshold: 2,
-                ..Default::default()
-            },
+            OpenOptions::default().wal_checkpoint_threshold(2),
         )
         .unwrap();
         db.execute(r#"(transact [[:alice :name "Alice"]])"#)
@@ -404,10 +398,7 @@ fn test_explicit_tx_rollback_not_persisted() {
 fn test_explicit_tx_multiple_transacts_rollback_not_persisted() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("multi_rollback.graph");
-    let opts = OpenOptions {
-        wal_checkpoint_threshold: usize::MAX,
-        ..Default::default()
-    };
+    let opts = OpenOptions::default().wal_checkpoint_threshold(usize::MAX);
 
     {
         let db = Minigraf::open_with_options(&db_path, opts).unwrap();

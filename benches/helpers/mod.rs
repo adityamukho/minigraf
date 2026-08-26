@@ -35,13 +35,11 @@ pub fn populate_file(n: usize, path: &str) {
 /// Uses `wal_checkpoint_threshold: usize::MAX` to suppress auto-checkpoint.
 /// Facts are committed (WAL-written) but not flushed to packed pages.
 pub fn populate_file_no_checkpoint(n: usize, path: &str) {
-    let db = OpenOptions {
-        wal_checkpoint_threshold: usize::MAX,
-        ..Default::default()
-    }
-    .path(path)
-    .open()
-    .unwrap();
+    let db = OpenOptions::default()
+        .wal_checkpoint_threshold(usize::MAX)
+        .path(path)
+        .open()
+        .unwrap();
     insert_val_facts(&db, n);
     // Do NOT checkpoint — WAL entries remain pending.
 }
@@ -50,13 +48,11 @@ pub fn populate_file_no_checkpoint(n: usize, path: &str) {
 /// Used by insert_file and concurrent_file groups so WAL fsyncs are
 /// not interrupted by checkpoint spikes during measurement.
 pub fn open_file_no_checkpoint(path: &str) -> Arc<Minigraf> {
-    let db = OpenOptions {
-        wal_checkpoint_threshold: usize::MAX,
-        ..Default::default()
-    }
-    .path(path)
-    .open()
-    .unwrap();
+    let db = OpenOptions::default()
+        .wal_checkpoint_threshold(usize::MAX)
+        .path(path)
+        .open()
+        .unwrap();
     Arc::new(db)
 }
 

@@ -101,7 +101,13 @@ pub enum SyncMode {
 // ─── OpenOptions ─────────────────────────────────────────────────────────────
 
 /// Configuration options for opening a `Minigraf` database.
+///
+/// `#[non_exhaustive]`: construct via [`OpenOptions::new`]/[`OpenOptions::default`]
+/// plus the builder methods, or `..Default::default()`, not a full struct literal.
+/// This is the third field added since 1.0 (`allow_unlocked`, `synchronous`); marking
+/// it non-exhaustive now means the next one won't be a breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OpenOptions {
     /// Number of WAL entries committed before an automatic checkpoint is triggered.
     ///
@@ -157,6 +163,14 @@ impl OpenOptions {
     /// Create a new `OpenOptions` with default settings.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the number of WAL entries committed before an automatic checkpoint
+    /// is triggered. See [`OpenOptions::wal_checkpoint_threshold`].
+    #[must_use]
+    pub fn wal_checkpoint_threshold(mut self, n: usize) -> Self {
+        self.wal_checkpoint_threshold = n;
+        self
     }
 
     /// Set the number of pages to hold in the LRU page cache.
